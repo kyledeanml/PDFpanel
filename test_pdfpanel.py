@@ -249,6 +249,57 @@ class TestPDFpanelGUI(unittest.TestCase):
         finally:
             win.destroy()
 
+    def test_drag_and_drop_uri_parsing_and_modes(self):
+        if Gdk.Display.get_default() is None:
+            self.skipTest("Requires active display server")
+        from gi.repository import GLib
+        from pdfpanel import PDFpanelWindow
+
+        pdf1 = os.path.join(self.tmp_dir, "My Report 1.pdf")
+        pdf2 = os.path.join(self.tmp_dir, "Annex 2.pdf")
+        pdf3 = os.path.join(self.tmp_dir, "Appendix 3.pdf")
+        txt_file = os.path.join(self.tmp_dir, "ignore.txt")
+        _make_sample_pdf(pdf1, ["Page 1"])
+        _make_sample_pdf(pdf2, ["Page A", "Page B"])
+        _make_sample_pdf(pdf3, ["Appendix"])
+        with open(txt_file, "w", encoding="utf-8") as f:
+            f.write("not a pdf")
+
+        uri1 = GLib.filename_to_uri(pdf1, None)
+        uri2 = GLib.filename_to_uri(pdf2, None)
+        txt_uri = GLib.filename_to_uri(txt_file, None)
+
+        parsed = PDFpanelWindow.extract_dropped_pdf_paths(
+            uris=[uri1, txt_uri, uri1],
+            text=f"copy\n{uri2}\n# comment\n{txt_file}\n",
+        )
+        self.assertEqual(parsed, [pdf1, pdf2])
+
+        win = PDFpanelWindow()
+        try:
+            for w in (win, win.merge_tree, win.scroll_prev, win.bm_tree):
+                self.assertIsNotNone(w.drag_dest_get_target_list())
+
+            # Single file drop on Split tab loads it as active PDF
+            win.tool_stack.set_visible_child_name("split")
+            self.assertTrue(win._handle_dropped_pdfs([pdf1], mode="smart"))
+            self.assertEqual(win.active_pdf, pdf1)
+            self.assertEqual(len(win.merge_store), 0)
+
+            # Multi-file drop switches to Merge tab and populates Merge queue
+            self.assertTrue(win._handle_dropped_pdfs([pdf1, pdf2], mode="smart"))
+            self.assertEqual(win.tool_stack.get_visible_child_name(), "merge")
+            self.assertEqual(len(win.merge_store), 2)
+
+            # Single file drop while already on Merge tab appends to Merge queue
+            self.assertTrue(win._handle_dropped_pdfs([pdf3], mode="merge"))
+            self.assertEqual(len(win.merge_store), 3)
+
+            # Invalid/empty drop is rejected cleanly
+            self.assertFalse(win._handle_dropped_pdfs([], mode="smart"))
+        finally:
+            win.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

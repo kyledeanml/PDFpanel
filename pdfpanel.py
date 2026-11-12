@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 from typing import Callable, List, Optional, Tuple
+from urllib.parse import unquote
 
 sys.dont_write_bytecode = True
 
@@ -125,6 +126,11 @@ treeview header button {
     padding: 4px 10px;
     color: #94a3b8;
 }
+.drop-active {
+    border: 2px dashed #00f0ff;
+    background-color: rgba(0, 240, 255, 0.08);
+    border-radius: 6px;
+}
 """
 
 
@@ -158,6 +164,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self._build_headerbar()
         self._build_layout()
         self._bind_shortcuts()
+        self._init_drag_and_drop()
         self.show_all()
         self._update_preview_controls()
 
@@ -236,10 +243,10 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         outer.pack_start(paned, True, True, 0)
 
         # Left workbench stack
-        left_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        left_wrap.set_border_width(12)
-        left_wrap.pack_start(self.tool_stack, True, True, 0)
-        paned.pack1(left_wrap, True, False)
+        self.left_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.left_wrap.set_border_width(12)
+        self.left_wrap.pack_start(self.tool_stack, True, True, 0)
+        paned.pack1(self.left_wrap, True, False)
 
         # Build the 4 core workspaces
         self._build_merge_tab()
@@ -248,10 +255,10 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self._build_bookmark_tab()
 
         # Right preview & inspector sidebar
-        right_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        right_panel.set_border_width(12)
-        right_panel.set_size_request(330, -1)
-        paned.pack2(right_panel, False, False)
+        self.right_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.right_panel.set_border_width(12)
+        self.right_panel.set_size_request(330, -1)
+        paned.pack2(self.right_panel, False, False)
         paned.set_position(800)
 
         info_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -266,23 +273,23 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self.lbl_active_name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         info_card.pack_start(self.lbl_active_name, False, False, 0)
 
-        self.lbl_active_meta = Gtk.Label(label="Open a PDF to inspect pages, size, and bookmarks.")
+        self.lbl_active_meta = Gtk.Label(label="Open or drop a PDF here to inspect pages, size, and bookmarks.")
         self.lbl_active_meta.get_style_context().add_class("muted-label")
         self.lbl_active_meta.set_xalign(0.0)
         self.lbl_active_meta.set_line_wrap(True)
         info_card.pack_start(self.lbl_active_meta, False, False, 0)
-        right_panel.pack_start(info_card, False, False, 0)
+        self.right_panel.pack_start(info_card, False, False, 0)
 
         # Thumbnail preview frame
-        prev_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        prev_card.get_style_context().add_class("panel-card")
+        self.prev_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.prev_card.get_style_context().add_class("panel-card")
 
-        scroll_prev = Gtk.ScrolledWindow()
-        scroll_prev.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll_prev.set_min_content_height(380)
+        self.scroll_prev = Gtk.ScrolledWindow()
+        self.scroll_prev.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroll_prev.set_min_content_height(380)
         self.preview_image = Gtk.Image()
-        scroll_prev.add(self.preview_image)
-        prev_card.pack_start(scroll_prev, True, True, 0)
+        self.scroll_prev.add(self.preview_image)
+        self.prev_card.pack_start(self.scroll_prev, True, True, 0)
 
         nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.btn_prev_page = Gtk.Button(label="Prev")
@@ -297,9 +304,9 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         nav_box.pack_start(self.spin_preview_page, True, True, 0)
         nav_box.pack_start(self.lbl_preview_total, False, False, 2)
         nav_box.pack_start(self.btn_next_page, False, False, 0)
-        prev_card.pack_start(nav_box, False, False, 0)
+        self.prev_card.pack_start(nav_box, False, False, 0)
 
-        right_panel.pack_start(prev_card, True, True, 0)
+        self.right_panel.pack_start(self.prev_card, True, True, 0)
 
         # Status bar
         status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -322,7 +329,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         box.pack_start(hdr, False, False, 0)
 
         desc = Gtk.Label(
-            label="Add two or more PDFs, reorder them, optionally customize per-file page ranges (e.g. 'all' or '1-5, 8'), and combine into a single PDF."
+            label="Add or drag-and-drop two or more PDFs from your Desktop or file manager, reorder them, customize page ranges (e.g. 'all' or '1-5, 8'), and combine into one PDF."
         )
         desc.get_style_context().add_class("muted-label")
         desc.set_xalign(0.0)
@@ -364,10 +371,10 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         col_spec = Gtk.TreeViewColumn("Page Range (editable)", r_spec, text=4)
         self.merge_tree.append_column(col_spec)
 
-        sc = Gtk.ScrolledWindow()
-        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        sc.add(self.merge_tree)
-        box.pack_start(sc, True, True, 0)
+        self.merge_scroll = Gtk.ScrolledWindow()
+        self.merge_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.merge_scroll.add(self.merge_tree)
+        box.pack_start(self.merge_scroll, True, True, 0)
 
         foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.chk_merge_bookmarks = Gtk.CheckButton(label="Create top-level bookmark per merged file")
@@ -597,6 +604,152 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         ):
             kval, kmod = Gtk.accelerator_parse(f"<Control>{key}" if mod else key)
             accel.connect(kval, kmod, Gtk.AccelFlags.VISIBLE, fn)
+
+    def _init_drag_and_drop(self):
+        targets = [
+            Gtk.TargetEntry.new("text/uri-list", 0, 0),
+            Gtk.TargetEntry.new("x-special/gnome-icon-list", 0, 1),
+            Gtk.TargetEntry.new("text/plain", 0, 2),
+        ]
+        drop_widgets = [
+            (self.merge_tree, "merge", self.merge_scroll),
+            (self.merge_scroll, "merge", self.merge_scroll),
+            (self.bm_tree, "active", self.bm_tree),
+            (self.scroll_prev, "active", self.prev_card),
+            (self.right_panel, "active", self.prev_card),
+            (self.left_wrap, "smart", self.left_wrap),
+            (self, "smart", self.left_wrap),
+        ]
+        actions = Gdk.DragAction.COPY | Gdk.DragAction.MOVE | Gdk.DragAction.LINK
+        for widget, mode, hl_widget in drop_widgets:
+            widget.drag_dest_set(Gtk.DestDefaults.ALL, targets, actions)
+            widget.connect("drag-motion", self._on_drag_motion, hl_widget)
+            widget.connect("drag-leave", self._on_drag_leave, hl_widget)
+            widget.connect("drag-data-received", self._on_drag_data_received, mode, hl_widget)
+
+    def _on_drag_motion(self, _widget, context, _x: int, _y: int, time: int, hl_widget: Gtk.Widget) -> bool:
+        Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+        hl_widget.get_style_context().add_class("drop-active")
+        return True
+
+    def _on_drag_leave(self, _widget, _context, _time: int, hl_widget: Gtk.Widget):
+        hl_widget.get_style_context().remove_class("drop-active")
+
+    def _on_drag_data_received(
+        self,
+        _widget,
+        context,
+        _x: int,
+        _y: int,
+        selection_data,
+        _info: int,
+        time: int,
+        mode: str,
+        hl_widget: Gtk.Widget,
+    ):
+        hl_widget.get_style_context().remove_class("drop-active")
+        uris = selection_data.get_uris() or []
+        text = selection_data.get_text()
+        paths = self.extract_dropped_pdf_paths(uris, text)
+        handled = self._handle_dropped_pdfs(paths, mode=mode)
+        Gtk.drag_finish(context, handled, False, time)
+
+    @staticmethod
+    def _is_pdf_file(path: str) -> bool:
+        if not os.path.isfile(path):
+            return False
+        if path.lower().endswith(".pdf"):
+            return True
+        try:
+            with open(path, "rb") as f:
+                return f.read(5) == b"%PDF-"
+        except OSError:
+            return False
+
+    @classmethod
+    def extract_dropped_pdf_paths(cls, uris: Optional[List[str]] = None, text: Optional[str] = None) -> List[str]:
+        """Parse dropped URIs or file-manager clipboard/drop lines into deduplicated local PDF paths."""
+        raw_items: List[str] = []
+        if uris:
+            raw_items.extend(u for u in uris if u)
+        if text:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or stripped in ("copy", "cut"):
+                    continue
+                raw_items.append(stripped)
+
+        resolved: List[str] = []
+        seen = set()
+        for item in raw_items:
+            candidate = item.strip().strip("\"'")
+            if not candidate:
+                continue
+            path: Optional[str] = None
+            if candidate.startswith("file://"):
+                try:
+                    path, _host = GLib.filename_from_uri(candidate)
+                except Exception:
+                    raw_path = candidate[len("file://"):]
+                    if raw_path.startswith("localhost/"):
+                        raw_path = raw_path[len("localhost"):]
+                    path = unquote(raw_path)
+            elif "://" not in candidate:
+                path = unquote(candidate) if "%" in candidate and not os.path.exists(candidate) else candidate
+
+            if not path:
+                continue
+            abs_path = os.path.abspath(os.path.expanduser(path))
+            if abs_path not in seen and cls._is_pdf_file(abs_path):
+                seen.add(abs_path)
+                resolved.append(abs_path)
+        return resolved
+
+    def _handle_dropped_pdfs(self, paths: List[str], mode: str = "smart") -> bool:
+        if not paths:
+            self.set_status("Drop ignored: no valid PDF files found.")
+            return False
+        if self._busy:
+            self.set_status("Busy processing current task — drop again once complete.")
+            return False
+
+        effective_mode = mode
+        if mode == "smart":
+            if self.tool_stack.get_visible_child_name() == "merge" or len(paths) > 1:
+                effective_mode = "merge"
+            else:
+                effective_mode = "active"
+
+        if effective_mode == "merge":
+            added: List[str] = []
+            for p in paths:
+                try:
+                    self._add_merge_file(p)
+                    added.append(p)
+                except Exception as e:
+                    self._show_error(str(e))
+            if not added:
+                return False
+            self.tool_stack.set_visible_child_name("merge")
+            if not self.active_pdf:
+                self.load_active_pdf(added[0])
+            self.set_status(f"Added {len(added)} PDF(s) to Merge queue via drag & drop.")
+            return True
+
+        self.load_active_pdf(paths[0])
+        if len(paths) > 1:
+            added_count = 0
+            for p in paths:
+                try:
+                    self._add_merge_file(p)
+                    added_count += 1
+                except Exception as e:
+                    self._show_error(str(e))
+            if added_count:
+                self.set_status(
+                    f"Loaded {os.path.basename(paths[0])} and queued {added_count} PDFs for Merge."
+                )
+        return True
 
     def load_active_pdf(self, pdf_path: str):
         abs_p = os.path.abspath(pdf_path)
