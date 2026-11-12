@@ -264,6 +264,33 @@ class TestPDFEngineOperations(unittest.TestCase):
         self.assertEqual(total_p, 5)
         self.assertEqual(PDFEngine.inspect_pdf(merged_c).page_count, 5)
 
+    def test_merge_1000_pages_with_bookmarks_c_speed(self):
+        import time
+
+        src_a = os.path.join(self.tmp_dir, "Volume_A.pdf")
+        src_b = os.path.join(self.tmp_dir, "Volume_B.pdf")
+        _make_sample_pdf(src_a, [f"Vol A p{i}" for i in range(1, 501)])
+        _make_sample_pdf(src_b, [f"Vol B p{i}" for i in range(1, 501)])
+
+        merged_out = os.path.join(self.tmp_dir, "Merged1000.pdf")
+        t0 = time.perf_counter()
+        out_p, total = PDFEngine.merge_pdfs(
+            [(src_a, "all"), (src_b, "all")],
+            merged_out,
+            add_file_bookmarks=True,
+        )
+        elapsed = time.perf_counter() - t0
+
+        self.assertEqual(out_p, merged_out)
+        self.assertEqual(total, 1000)
+        self.assertLess(elapsed, 2.0, f"1000-page C merge took too long: {elapsed:.3f}s")
+        self.assertEqual(PDFEngine.inspect_pdf(merged_out).page_count, 1000)
+        bms = PDFEngine.get_bookmarks(merged_out)
+        self.assertEqual([(b.title, b.page, b.level) for b in bms], [
+            ("Volume_A", 1, 1),
+            ("Volume_B", 501, 1),
+        ])
+
 
 class TestPDFpanelGUI(unittest.TestCase):
     def setUp(self):

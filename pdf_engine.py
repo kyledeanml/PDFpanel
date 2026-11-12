@@ -405,6 +405,42 @@ class QpdfBridge:
             lib.qpdf_add_page.argtypes = [c_void_p, c_void_p, c_uint, c_int]
             lib.qpdf_add_page.restype = c_int
 
+            lib.qpdf_update_all_pages_cache.argtypes = [c_void_p]
+            lib.qpdf_update_all_pages_cache.restype = c_int
+
+            lib.qpdf_get_root.argtypes = [c_void_p]
+            lib.qpdf_get_root.restype = c_uint
+
+            lib.qpdf_make_indirect_object.argtypes = [c_void_p, c_uint]
+            lib.qpdf_make_indirect_object.restype = c_uint
+
+            lib.qpdf_oh_new_dictionary.argtypes = [c_void_p]
+            lib.qpdf_oh_new_dictionary.restype = c_uint
+
+            lib.qpdf_oh_new_array.argtypes = [c_void_p]
+            lib.qpdf_oh_new_array.restype = c_uint
+
+            lib.qpdf_oh_new_integer.argtypes = [c_void_p, ctypes.c_longlong]
+            lib.qpdf_oh_new_integer.restype = c_uint
+
+            lib.qpdf_oh_new_name.argtypes = [c_void_p, c_char_p]
+            lib.qpdf_oh_new_name.restype = c_uint
+
+            lib.qpdf_oh_new_null.argtypes = [c_void_p]
+            lib.qpdf_oh_new_null.restype = c_uint
+
+            lib.qpdf_oh_new_unicode_string.argtypes = [c_void_p, c_char_p]
+            lib.qpdf_oh_new_unicode_string.restype = c_uint
+
+            lib.qpdf_oh_replace_key.argtypes = [c_void_p, c_uint, c_char_p, c_uint]
+            lib.qpdf_oh_replace_key.restype = None
+
+            lib.qpdf_oh_remove_key.argtypes = [c_void_p, c_uint, c_char_p]
+            lib.qpdf_oh_remove_key.restype = None
+
+            lib.qpdf_oh_append_item.argtypes = [c_void_p, c_uint, c_uint]
+            lib.qpdf_oh_append_item.restype = None
+
             lib.qpdf_init_write.argtypes = [c_void_p, c_char_p]
             lib.qpdf_init_write.restype = c_int
 
@@ -508,10 +544,139 @@ class QpdfBridge:
             return created
 
     @classmethod
+    def _attach_outlines(
+        cls,
+        doc_h: ctypes.c_void_p,
+        bookmarks: List[BookmarkItem],
+        max_page: int,
+    ):
+        """Replace /Outlines in doc_h with hierarchical PDF bookmarks directly in C."""
+        root = cls._lib.qpdf_get_root(doc_h)
+        cls._lib.qpdf_oh_remove_key(doc_h, root, b"/Outlines")
+        if not bookmarks:
+            return
+
+        rc = cls._lib.qpdf_update_all_pages_cache(doc_h)
+        cls._raise_if_error(doc_h, rc, "update_all_pages_cache")
+        total_pages = max(1, cls._lib.qpdf_get_num_pages(doc_h))
+        page_limit = min(total_pages, max(1, max_page))
+        page_handles = [cls._lib.qpdf_get_page_n(doc_h, i) for i in range(total_pages)]
+
+        # Build normalized tree of (title, clamped_page, children)
+        roots: List[dict] = []
+        stack: List[Tuple[int, dict]] = []
+        for bm in bookmarks:
+            title = (bm.title or "").strip() or f"Page {bm.page}"
+            pg = max(1, min(int(bm.page), page_limit))
+            lvl = max(1, int(bm.level))
+            node = {"title": title, "page": pg, "children": []}
+            while stack and stack[-1][0] >= lvl:
+                stack.pop()
+            if stack:
+                stack[-1][1]["children"].append(node)
+            else:
+                roots.append(node)
+            stack.append((lvl, node))
+
+        if not roots:
+            return
+
+        outlines_oh = cls._lib.qpdf_make_indirect_object(doc_h, cls._lib.qpdf_oh_new_dictionary(doc_h))
+        cls._lib.qpdf_oh_replace_key(doc_h, outlines_oh, b"/Type", cls._lib.qpdf_oh_new_name(doc_h, b"/Outlines"))
+
+        def _build_level(nodes: List[dict], parent_oh: int) -> Tuple[int, int, int]:
+            oh_list: List[int] = []
+            visible_total = 0
+            for item in nodes:
+                nd_oh = cls._lib.qpdf_make_indirect_object(doc_h, cls._lib.qpdf_oh_new_dictionary(doc_h))
+                title_oh = cls._lib.qpdf_oh_new_unicode_string(doc_h, item["title"].encode("utf-8"))
+                cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Title", title_oh)
+                cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Parent", parent_oh)
+
+                dest_arr = cls._lib.qpdf_oh_new_array(doc_h)
+                cls._lib.qpdf_oh_append_item(doc_h, dest_arr, page_handles[item["page"] - 1])
+                cls._lib.qpdf_oh_append_item(doc_h, dest_arr, cls._lib.qpdf_oh_new_name(doc_h, b"/XYZ"))
+                for _ in range(3):
+                    cls._lib.qpdf_oh_append_item(doc_h, dest_arr, cls._lib.qpdf_oh_new_null(doc_h))
+                cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Dest", dest_arr)
+
+                visible_total += 1
+                children = item["children"]
+                if children:
+                    c_first, c_last, c_vis = _build_level(children, nd_oh)
+                    cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/First", c_first)
+                    cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Last", c_last)
+                    cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Count", cls._lib.qpdf_oh_new_integer(doc_h, c_vis))
+                    visible_total += c_vis
+                oh_list.append(nd_oh)
+
+            for i, nd_oh in enumerate(oh_list):
+                if i > 0:
+                    cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Prev", oh_list[i - 1])
+                if i + 1 < len(oh_list):
+                    cls._lib.qpdf_oh_replace_key(doc_h, nd_oh, b"/Next", oh_list[i + 1])
+            return oh_list[0], oh_list[-1], visible_total
+
+        first_oh, last_oh, total_vis = _build_level(roots, outlines_oh)
+        cls._lib.qpdf_oh_replace_key(doc_h, outlines_oh, b"/First", first_oh)
+        cls._lib.qpdf_oh_replace_key(doc_h, outlines_oh, b"/Last", last_oh)
+        cls._lib.qpdf_oh_replace_key(doc_h, outlines_oh, b"/Count", cls._lib.qpdf_oh_new_integer(doc_h, total_vis))
+        cls._lib.qpdf_oh_replace_key(doc_h, root, b"/Outlines", outlines_oh)
+        cls._lib.qpdf_oh_replace_key(doc_h, root, b"/PageMode", cls._lib.qpdf_oh_new_name(doc_h, b"/UseOutlines"))
+
+    @classmethod
+    def write_bookmarks(
+        cls,
+        src_pdf: str,
+        out_pdf: str,
+        bookmarks: List[BookmarkItem],
+    ) -> str:
+        """Write hierarchical bookmarks into out_pdf losslessly via libqpdf C API."""
+        src_abs = os.path.abspath(src_pdf)
+        out_abs = os.path.abspath(out_pdf)
+        os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+        with cls._handle() as doc_h:
+            rc = cls._lib.qpdf_read(doc_h, os.fsencode(src_abs), None)
+            cls._raise_if_error(doc_h, rc, "read")
+            total = max(1, cls._lib.qpdf_get_num_pages(doc_h))
+            cls._attach_outlines(doc_h, bookmarks, max_page=total)
+            cls._write_dst(doc_h, out_abs)
+        return out_abs
+
+    @classmethod
+    def _open_source_cached(
+        cls,
+        src_abs: str,
+        opened_handles: Dict[str, Tuple[ctypes.c_void_p, List[int]]],
+    ) -> Tuple[ctypes.c_void_p, List[int]]:
+        if src_abs not in opened_handles:
+            sh = ctypes.c_void_p(cls._lib.qpdf_init())
+            if not sh:
+                raise RuntimeError("qpdf_init returned NULL")
+            cls._lib.qpdf_silence_errors(sh)
+            cls._lib.qpdf_set_suppress_warnings(sh, 1)
+            try:
+                rc = cls._lib.qpdf_read(sh, os.fsencode(src_abs), None)
+                cls._raise_if_error(sh, rc, "read")
+                rc = cls._lib.qpdf_push_inherited_attributes_to_page(sh)
+                cls._raise_if_error(sh, rc, "push_inherited_attributes")
+                n = cls._lib.qpdf_get_num_pages(sh)
+                pg_handles = [cls._lib.qpdf_get_page_n(sh, i) for i in range(n)]
+                opened_handles[src_abs] = (sh, pg_handles)
+            except Exception:
+                try:
+                    cls._lib.qpdf_oh_release_all(sh)
+                finally:
+                    cls._lib.qpdf_cleanup(ctypes.byref(sh))
+                raise
+        return opened_handles[src_abs]
+
+    @classmethod
     def merge_pages(
         cls,
         items: List[Tuple[str, Optional[List[int]]]],
         out_pdf: str,
+        bookmarks: Optional[List[BookmarkItem]] = None,
     ) -> int:
         """Losslessly merge [(src_pdf, 1-based page list or None for all), ...] via libqpdf."""
         out_abs = os.path.abspath(out_pdf)
@@ -526,28 +691,7 @@ class QpdfBridge:
 
                 for src_path, pages in items:
                     src_abs = os.path.abspath(src_path)
-                    if src_abs not in opened_handles:
-                        sh = ctypes.c_void_p(cls._lib.qpdf_init())
-                        if not sh:
-                            raise RuntimeError("qpdf_init returned NULL")
-                        cls._lib.qpdf_silence_errors(sh)
-                        cls._lib.qpdf_set_suppress_warnings(sh, 1)
-                        try:
-                            rc = cls._lib.qpdf_read(sh, os.fsencode(src_abs), None)
-                            cls._raise_if_error(sh, rc, "read")
-                            rc = cls._lib.qpdf_push_inherited_attributes_to_page(sh)
-                            cls._raise_if_error(sh, rc, "push_inherited_attributes")
-                            n = cls._lib.qpdf_get_num_pages(sh)
-                            pg_handles = [cls._lib.qpdf_get_page_n(sh, i) for i in range(n)]
-                            opened_handles[src_abs] = (sh, pg_handles)
-                        except Exception:
-                            try:
-                                cls._lib.qpdf_oh_release_all(sh)
-                            finally:
-                                cls._lib.qpdf_cleanup(ctypes.byref(sh))
-                            raise
-
-                    src_h, pg_handles = opened_handles[src_abs]
+                    src_h, pg_handles = cls._open_source_cached(src_abs, opened_handles)
                     n_pages = len(pg_handles)
                     selected = pages if pages is not None else list(range(1, n_pages + 1))
                     for p in selected:
@@ -557,6 +701,55 @@ class QpdfBridge:
                         cls._raise_if_error(dst_h, rc, "add_page")
                         total_written += 1
 
+                if bookmarks:
+                    cls._attach_outlines(dst_h, bookmarks, max_page=max(1, total_written))
+                cls._write_dst(dst_h, out_abs)
+            return total_written
+        finally:
+            for sh, _ in opened_handles.values():
+                try:
+                    cls._lib.qpdf_oh_release_all(sh)
+                finally:
+                    cls._lib.qpdf_cleanup(ctypes.byref(sh))
+
+    @classmethod
+    def merge_with_specs(
+        cls,
+        sources: List[Tuple[str, str]],
+        out_pdf: str,
+        parse_spec_fn: Callable[[str, int], List[int]],
+        add_file_bookmarks: bool = True,
+    ) -> int:
+        """Open each source once in C, resolve page specs, merge pages, and attach outlines in one pass."""
+        out_abs = os.path.abspath(out_pdf)
+        os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+        opened_handles: Dict[str, Tuple[ctypes.c_void_p, List[int]]] = {}
+        merged_bookmarks: List[BookmarkItem] = []
+        total_written = 0
+
+        try:
+            with cls._handle() as dst_h:
+                rc = cls._lib.qpdf_empty_pdf(dst_h)
+                cls._raise_if_error(dst_h, rc, "empty_pdf")
+
+                for src_path, page_spec in sources:
+                    src_abs = os.path.abspath(src_path)
+                    src_h, pg_handles = cls._open_source_cached(src_abs, opened_handles)
+                    n_pages = len(pg_handles)
+                    selected = parse_spec_fn(page_spec, max(1, n_pages))
+                    start_page = total_written + 1
+                    for p in selected:
+                        if p < 1 or p > n_pages:
+                            raise ValueError(f"Page {p} out of range 1..{n_pages} for {src_abs}")
+                        rc = cls._lib.qpdf_add_page(dst_h, src_h, pg_handles[p - 1], 0)
+                        cls._raise_if_error(dst_h, rc, "add_page")
+                        total_written += 1
+                    if add_file_bookmarks and selected:
+                        label = os.path.splitext(os.path.basename(src_abs))[0]
+                        merged_bookmarks.append(BookmarkItem(title=label, page=start_page, level=1))
+
+                if add_file_bookmarks and merged_bookmarks:
+                    cls._attach_outlines(dst_h, merged_bookmarks, max_page=max(1, total_written))
                 cls._write_dst(dst_h, out_abs)
             return total_written
         finally:
@@ -1076,13 +1269,25 @@ class PDFEngine:
         replace_existing: bool = True,
     ) -> str:
         """Write hierarchical PDF bookmarks into out_pdf (preserving pages and content)."""
-        gs = cls._ensure_gs()
-        info = cls.inspect_pdf(src_pdf)
         out_abs = os.path.abspath(out_pdf)
         os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+        src_abs = os.path.abspath(src_pdf)
+        if not os.path.isfile(src_abs):
+            raise FileNotFoundError(f"PDF file not found: {src_abs}")
 
+        if QpdfBridge.is_available():
+            try:
+                effective = list(bookmarks)
+                if not replace_existing:
+                    effective = cls.get_bookmarks(src_abs) + effective
+                return QpdfBridge.write_bookmarks(src_abs, out_abs, effective)
+            except Exception:
+                pass
+
+        gs = cls._ensure_gs()
+        info = cls.inspect_pdf(src_abs)
         with tempfile.TemporaryDirectory(prefix="pdfpanel_bm_") as tmp_dir:
-            input_pdf = os.path.abspath(src_pdf)
+            input_pdf = src_abs
             if replace_existing and info.bookmark_count > 0:
                 input_pdf = cls._strip_existing_outlines(input_pdf, tmp_dir)
 
@@ -1139,13 +1344,27 @@ class PDFEngine:
         add_file_bookmarks: bool = True,
     ) -> Tuple[str, int]:
         """Merge multiple PDF files (optionally with page specs and per-file bookmarks).
-        Uses in-process libqpdf C API first, with Ghostscript/Poppler fallback.
+        Uses in-process libqpdf C API for single-pass merging + /Outlines, with Ghostscript/Poppler fallback.
         Returns (out_pdf_abs, total_pages).
         """
         if not sources:
             raise ValueError("Add at least one PDF file to merge.")
         out_abs = os.path.abspath(out_pdf)
         os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+
+        if QpdfBridge.is_available():
+            try:
+                total_pages = QpdfBridge.merge_with_specs(
+                    sources,
+                    out_abs,
+                    cls.parse_page_spec,
+                    add_file_bookmarks=add_file_bookmarks,
+                )
+                return out_abs, total_pages
+            except (FileNotFoundError, ValueError):
+                raise
+            except Exception:
+                pass
 
         resolved_items: List[Tuple[str, List[int], int]] = []
         merged_bookmarks: List[BookmarkItem] = []
@@ -1161,32 +1380,6 @@ class PDFEngine:
             running_page += len(selected)
 
         total_pages = max(0, running_page - 1)
-
-        if QpdfBridge.is_available():
-            try:
-                qpdf_items = [
-                    (src, None if sel == list(range(1, total + 1)) else sel)
-                    for src, sel, total in resolved_items
-                ]
-                if not (add_file_bookmarks and merged_bookmarks):
-                    QpdfBridge.merge_pages(qpdf_items, out_abs)
-                    return out_abs, total_pages
-
-                gs = cls._ensure_gs()
-                with tempfile.TemporaryDirectory(prefix="pdfpanel_merge_") as tmp_dir:
-                    tmp_raw = os.path.join(tmp_dir, "merged_raw.pdf")
-                    marks_ps = os.path.join(tmp_dir, "merge_marks.ps")
-                    QpdfBridge.merge_pages(qpdf_items, tmp_raw)
-                    with open(marks_ps, "w", encoding="utf-8") as f:
-                        f.write(cls._build_pdfmark(merged_bookmarks, max_page=max(1, total_pages)))
-                    proc = subprocess.run(
-                        [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={out_abs}", tmp_raw, marks_ps],
-                        capture_output=True, text=True, check=False,
-                    )
-                    if proc.returncode == 0 and os.path.isfile(out_abs):
-                        return out_abs, total_pages
-            except Exception:
-                pass
 
         # Fallback path via Poppler CLI / Ghostscript
         gs = cls._ensure_gs()
