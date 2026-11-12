@@ -83,6 +83,7 @@ class PopplerBridge:
 
     _lib = None
     _glib = None
+    _gobject = None
     _init_attempted = False
     _available = False
 
@@ -93,6 +94,7 @@ class PopplerBridge:
         cls._init_attempted = True
         try:
             glib_path = ctypes.util.find_library("glib-2.0")
+            gobj_path = ctypes.util.find_library("gobject-2.0")
             poppler_path = ctypes.util.find_library("poppler-glib")
             if not poppler_path:
                 for cand in (
@@ -106,10 +108,11 @@ class PopplerBridge:
                 return False
 
             cls._glib = ctypes.CDLL(glib_path or "libglib-2.0.so.0")
+            cls._gobject = ctypes.CDLL(gobj_path or "libgobject-2.0.so.0")
             cls._lib = ctypes.CDLL(poppler_path)
 
-            cls._glib.g_object_unref.argtypes = [ctypes.c_void_p]
-            cls._glib.g_object_unref.restype = None
+            cls._gobject.g_object_unref.argtypes = [ctypes.c_void_p]
+            cls._gobject.g_object_unref.restype = None
             cls._glib.g_free.argtypes = [ctypes.c_void_p]
             cls._glib.g_free.restype = None
 
@@ -182,8 +185,8 @@ class PopplerBridge:
 
     @classmethod
     def close_document(cls, doc_handle: ctypes.c_void_p):
-        if doc_handle and cls._glib:
-            cls._glib.g_object_unref(doc_handle)
+        if doc_handle and cls._gobject:
+            cls._gobject.g_object_unref(doc_handle)
 
     @classmethod
     def get_n_pages(cls, doc_handle: ctypes.c_void_p) -> int:
@@ -204,7 +207,7 @@ class PopplerBridge:
             cls._lib.poppler_page_get_size(page, ctypes.byref(w), ctypes.byref(h))
             return (w.value, h.value)
         finally:
-            cls._glib.g_object_unref(page)
+            cls._gobject.g_object_unref(page)
 
     @classmethod
     def get_page_text_layout(
@@ -239,7 +242,7 @@ class PopplerBridge:
                     cls._glib.g_free(rects_ptr)
             return txt, rects
         finally:
-            cls._glib.g_object_unref(page)
+            cls._gobject.g_object_unref(page)
 
     @classmethod
     def render_page_surface(cls, doc_handle: ctypes.c_void_p, page_index: int, scale: float = 1.0):
@@ -277,7 +280,7 @@ class PopplerBridge:
         except Exception:
             return None
         finally:
-            cls._glib.g_object_unref(page)
+            cls._gobject.g_object_unref(page)
 
     @classmethod
     def get_pdf_bookmarks(cls, doc_handle: ctypes.c_void_p) -> List[BookmarkItem]:

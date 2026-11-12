@@ -13,6 +13,7 @@ import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gtk
 
@@ -24,15 +25,16 @@ def _make_sample_pdf(path: str, page_titles: list, with_highres_image: bool = Fa
     cr = cairo.Context(surf)
     for idx, title in enumerate(page_titles, start=1):
         if with_highres_image:
-            # Paint a detailed noisy RGB image so Ghostscript downsampling yields strong savings
-            img = cairo.ImageSurface(cairo.FORMAT_RGB24, 600, 400)
-            icr = cairo.Context(img)
-            for bx in range(0, 600, 12):
-                icr.set_source_rgb((bx % 97) / 97.0, ((bx * 3) % 71) / 71.0, ((idx * 29 + bx) % 53) / 53.0)
-                icr.rectangle(bx, 0, 12, 400)
-                icr.fill()
-            cr.set_source_surface(img, 50, 200)
+            # Pseudo-random high-resolution raster photo-like texture so /screen downsampling shrinks dramatically
+            w, h = 1400, 1000
+            raw = os.urandom(w * h * 4)
+            img = cairo.ImageSurface.create_for_data(bytearray(raw), cairo.FORMAT_RGB24, w, h, w * 4)
+            cr.save()
+            cr.translate(45, 180)
+            cr.scale(500.0 / w, 360.0 / h)
+            cr.set_source_surface(img, 0, 0)
             cr.paint()
+            cr.restore()
 
         cr.set_source_rgb(0.0, 0.0, 0.0)
         cr.set_font_size(18)
@@ -58,7 +60,8 @@ class TestPDFpanelAssets(unittest.TestCase):
 
         desktop_path = os.path.join(self.base_dir, "pdfpanel.desktop")
         self.assertTrue(os.path.isfile(desktop_path))
-        desktop_txt = open(desktop_path, "r", encoding="utf-8").read()
+        with open(desktop_path, "r", encoding="utf-8") as f:
+            desktop_txt = f.read()
         self.assertIn("Name=PDFpanel", desktop_txt)
         self.assertIn("StartupWMClass=pdfpanel", desktop_txt)
         self.assertIn("MimeType=application/pdf;", desktop_txt)
