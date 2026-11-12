@@ -421,6 +421,42 @@ class TestPDFpanelGUI(unittest.TestCase):
         finally:
             win.destroy()
 
+    def test_menu_reload_refreshes_modified_pdf_and_preserves_page(self):
+        if Gdk.Display.get_default() is None:
+            self.skipTest("Requires active display server")
+        from pdfpanel import PDFpanelWindow
+
+        pdf_path = os.path.join(self.tmp_dir, "ReloadTarget.pdf")
+        _make_sample_pdf(pdf_path, ["P1", "P2", "P3"])
+
+        win = PDFpanelWindow(initial_files=[pdf_path])
+        try:
+            labels = [
+                c.get_label()
+                for c in win.app_menu.get_children()
+                if hasattr(c, "get_label") and c.get_label()
+            ]
+            self.assertIn("Reload PDF", labels)
+
+            win._render_preview_page(2)
+            self.assertEqual(win.preview_page, 2)
+            self.assertEqual(win.active_info.page_count, 3)
+
+            # Modify file on disk to have 4 pages, then trigger Reload
+            _make_sample_pdf(pdf_path, ["New P1", "New P2", "New P3", "New P4"])
+            reload_item = next(
+                c for c in win.app_menu.get_children()
+                if hasattr(c, "get_label") and c.get_label() == "Reload PDF"
+            )
+            reload_item.activate()
+
+            self.assertEqual(win.active_info.page_count, 4)
+            self.assertEqual(win.preview_page, 2)
+            self.assertEqual(win.merge_store[0][2], 4)
+            self.assertIn("Reloaded ReloadTarget.pdf", win.lbl_status.get_text())
+        finally:
+            win.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

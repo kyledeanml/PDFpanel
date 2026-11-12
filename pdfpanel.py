@@ -224,11 +224,19 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         btn_menu = Gtk.MenuButton()
         btn_menu.set_label("Menu")
         menu = Gtk.Menu()
-        for label, cb in (
+        self.app_menu = menu
+        for entry in (
+            ("Reload PDF", self.on_reload_active_pdf),
+            None,
             ("Open in DocuPanel...", self._on_open_in_docupanel),
             ("Open Last Output Folder", self._on_open_last_folder),
+            None,
             ("About PDFpanel", self._on_about),
         ):
+            if entry is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            label, cb = entry
             item = Gtk.MenuItem(label=label)
             item.connect("activate", lambda *_, fn=cb: fn())
             menu.append(item)
@@ -630,6 +638,8 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self.add_accel_group(accel)
         for key, mod, fn in (
             ("o", Gdk.ModifierType.CONTROL_MASK, lambda *_: self.on_open_active_pdf()),
+            ("r", Gdk.ModifierType.CONTROL_MASK, lambda *_: self.on_reload_active_pdf()),
+            ("F5", Gdk.ModifierType(0), lambda *_: self.on_reload_active_pdf()),
             ("1", Gdk.ModifierType.CONTROL_MASK, lambda *_: self.tool_stack.set_visible_child_name("merge")),
             ("2", Gdk.ModifierType.CONTROL_MASK, lambda *_: self.tool_stack.set_visible_child_name("split")),
             ("3", Gdk.ModifierType.CONTROL_MASK, lambda *_: self.tool_stack.set_visible_child_name("compress")),
@@ -845,7 +855,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
             return False
         return self._on_draw_watermark(widget, cr, alpha=0.42, target_size=260, x_frac=0.5, y_frac=0.5)
 
-    def load_active_pdf(self, pdf_path: str):
+    def load_active_pdf(self, pdf_path: str, page: int = 1):
         abs_p = os.path.abspath(pdf_path)
         if not os.path.isfile(abs_p):
             self._show_error(f"File not found: {abs_p}")
@@ -864,7 +874,8 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
 
         self.active_pdf = abs_p
         self.active_info = info
-        self.preview_page = 1
+        target_page = max(1, min(page, max(1, info.page_count)))
+        self.preview_page = target_page
 
         self.lbl_active_name.set_text(os.path.basename(abs_p))
         self.lbl_active_meta.set_text(
@@ -876,9 +887,41 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self.spin_preview_page.set_range(1, max(1, info.page_count))
         self.spin_bm_page.set_range(1, max(1, info.page_count))
         self.lbl_preview_total.set_text(f"/ {info.page_count}")
-        self._render_preview_page(1)
+        self._render_preview_page(target_page)
         self._load_bookmarks_for_active_pdf()
         self.set_status(f"Loaded {os.path.basename(abs_p)} ({info.page_count} pages, {PDFEngine.format_size(info.file_size)})")
+
+    def on_reload_active_pdf(self):
+        """Reload the active PDF and refresh merge queue metadata from disk."""
+        it = self.merge_store.get_iter_first()
+        first_merge_path: Optional[str] = None
+        while it:
+            next_it = self.merge_store.iter_next(it)
+            p = self.merge_store.get_value(it, 0)
+            if p and os.path.isfile(p):
+                if first_merge_path is None:
+                    first_merge_path = p
+                try:
+                    minfo = PDFEngine.inspect_pdf(p)
+                    self.merge_store.set_value(it, 2, minfo.page_count)
+                    self.merge_store.set_value(it, 3, PDFEngine.format_size(minfo.file_size))
+                except Exception:
+                    pass
+            it = next_it
+
+        if self.active_pdf:
+            if not os.path.isfile(self.active_pdf):
+                self._show_error(f"Active PDF no longer exists on disk:\n{self.active_pdf}")
+                return
+            keep_page = self.preview_page
+            self.load_active_pdf(self.active_pdf, page=keep_page)
+            self.scroll_prev.queue_draw()
+            self.set_status(f"Reloaded {os.path.basename(self.active_pdf)} from disk.")
+        elif first_merge_path:
+            self.load_active_pdf(first_merge_path)
+        else:
+            self.scroll_prev.queue_draw()
+            self.set_status("Nothing to reload — open or drop a PDF file first.")
 
     def _render_preview_page(self, page_num: int):
         if not self.active_info or not self.preview_doc:
