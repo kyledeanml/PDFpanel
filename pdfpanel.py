@@ -27,33 +27,62 @@ from pdf_engine import BookmarkItem, PDFEngine, PDFInfo, PopplerBridge
 
 
 APP_CSS = b"""
-window, .background {
+window, window.background, dialog, messagedialog, aboutdialog, .background {
+    background-image: none;
     background-color: #0b0f19;
     color: #f8fafc;
 }
-headerbar {
-    background: linear-gradient(to bottom, #0f172a, #0b0f19);
-    border-bottom: 1px solid #1e293b;
-    color: #ffffff;
+label {
+    color: #f8fafc;
 }
-headerbar button, headerbar .stack-switcher button {
-    background-color: #111827;
+.muted-label, .dim-label {
+    color: #94a3b8;
+    font-size: 9pt;
+}
+headerbar {
+    background: linear-gradient(to bottom, #111827, #0b0f19);
+    border-bottom: 1px solid rgba(0, 240, 255, 0.38);
+    box-shadow: 0 1px 6px rgba(0, 240, 255, 0.14);
+    color: #ffffff;
+    padding: 4px 8px;
+}
+headerbar .title {
+    color: #ffffff;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-shadow: 0 0 8px rgba(0, 240, 255, 0.45);
+}
+headerbar .subtitle {
+    color: #38bdf8;
+    font-size: 90%;
+}
+headerbar button, headerbar .stack-switcher button, stackswitcher button {
+    background-image: none;
+    background-color: #161f33;
     color: #e2e8f0;
-    border: 1px solid #1e293b;
+    border: 1px solid rgba(56, 189, 248, 0.35);
     border-radius: 6px;
     padding: 5px 10px;
+    box-shadow: none;
 }
-headerbar .stack-switcher button:checked {
+headerbar .stack-switcher button:checked, stackswitcher button:checked,
+headerbar button:checked, headerbar button:active {
+    background-image: none;
     background-color: #082f49;
     color: #00f0ff;
-    border-color: #00d4ff;
+    border-color: #00f0ff;
     font-weight: bold;
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.28);
 }
-headerbar button:hover {
-    border-color: #38bdf8;
+headerbar button:hover, stackswitcher button:hover {
+    background-image: none;
+    background-color: #1e2d4a;
+    border-color: #00f0ff;
     color: #ffffff;
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.25);
 }
 .panel-card {
+    background-image: none;
     background-color: #0f172a;
     border: 1px solid #1e293b;
     border-radius: 8px;
@@ -65,63 +94,206 @@ headerbar button:hover {
     font-size: 10.5pt;
     letter-spacing: 0.4px;
 }
-.muted-label {
-    color: #94a3b8;
-    font-size: 9pt;
-}
 .stat-badge {
+    background-image: none;
     background-color: #082f49;
     color: #e0f2fe;
     border: 1px solid #0284c7;
     border-radius: 6px;
     padding: 8px 12px;
 }
-button.neon-primary {
-    background: linear-gradient(to bottom, #0284c7, #0369a1);
+button.neon-primary, button.suggested-action {
+    background-image: linear-gradient(to bottom, #0284c7, #0369a1);
+    background-color: #0284c7;
     color: #ffffff;
     border: 1px solid #00f0ff;
     border-radius: 6px;
     font-weight: bold;
     padding: 7px 14px;
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.22);
 }
-button.neon-primary:hover {
-    background: linear-gradient(to bottom, #0ea5e9, #0284c7);
+button.neon-primary:hover, button.suggested-action:hover {
+    background-image: linear-gradient(to bottom, #0ea5e9, #0284c7);
+    border-color: #7dd3fc;
 }
 button {
+    background-image: none;
     background-color: #162033;
     color: #f1f5f9;
     border: 1px solid #26354d;
     border-radius: 5px;
     padding: 5px 10px;
+    box-shadow: none;
 }
 button:hover {
+    background-image: none;
+    background-color: #1e2d4a;
     border-color: #00d4ff;
     color: #ffffff;
 }
-entry, spinbutton, combobox button {
+button:disabled {
+    background-image: none;
+    background-color: #0e1524;
+    color: #475569;
+    border-color: #1e293b;
+}
+entry, spinbutton, combobox, combobox button, combobox button.combo {
+    background-image: none;
     background-color: #090e1a;
     color: #ffffff;
     border: 1px solid #334155;
     border-radius: 5px;
+    caret-color: #00f0ff;
+    box-shadow: none;
 }
-entry:focus, spinbutton:focus {
+entry:focus, spinbutton:focus, combobox button:focus {
     border-color: #00f0ff;
+    box-shadow: 0 0 6px rgba(0, 240, 255, 0.30);
 }
-treeview {
+spinbutton button {
+    background-image: none;
+    background-color: #162033;
+    color: #38bdf8;
+    border: none;
+    border-left: 1px solid #26354d;
+    border-radius: 0;
+}
+spinbutton button:hover {
+    background-color: #082f49;
+    color: #00f0ff;
+}
+checkbutton check {
+    background-image: none;
+    background-color: #090e1a;
+    border: 1px solid #38bdf8;
+    border-radius: 3px;
+    color: #00f0ff;
+}
+checkbutton check:checked {
+    background-image: none;
+    background-color: #0284c7;
+    border-color: #00f0ff;
+    color: #ffffff;
+}
+menu, .menu, .context-menu, window.popup, window.popup .background,
+popover, popover.background, popover > box, combobox window, combobox menu {
+    background-image: none;
+    background-color: #0f172a;
+    color: #f8fafc;
+    border: 1px solid rgba(0, 240, 255, 0.45);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
+    padding: 4px 0;
+}
+menuitem, modelbutton, combobox menu menuitem {
+    background-image: none;
+    background-color: transparent;
+    color: #e2e8f0;
+    padding: 6px 14px;
+}
+menuitem label, modelbutton label, cellview {
+    color: inherit;
+}
+menuitem:hover, modelbutton:hover, combobox menu menuitem:hover {
+    background-image: none;
+    background-color: #0369a1;
+    color: #ffffff;
+}
+menuitem:disabled {
+    color: #475569;
+}
+menu separator, popover separator, separator {
+    background-color: #1e293b;
+    min-height: 1px;
+    min-width: 1px;
+}
+treeview, treeview.view, list, row {
+    background-image: none;
     background-color: #0a0f1d;
     color: #f8fafc;
 }
-treeview:selected {
+treeview:selected, treeview.view:selected, list row:selected, row:selected {
+    background-image: none;
     background-color: #034b75;
     color: #ffffff;
 }
+list row:hover, row:hover {
+    background-color: #162033;
+}
 treeview header button {
+    background-image: none;
     background-color: #0f172a;
     color: #38bdf8;
-    border-bottom: 1px solid #1e293b;
+    border: none;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.30);
+    border-right: 1px solid #1e293b;
     font-weight: bold;
+    border-radius: 0;
+}
+filechooser, filechooser box, filechooser paned, placessidebar, placessidebar list,
+actionbar, .dialog-vbox, .dialog-action-box, scrolledwindow, viewport, frame {
+    background-image: none;
+    background-color: #0b0f19;
+    color: #f8fafc;
+}
+placessidebar {
+    background-color: #090d16;
+    border-right: 1px solid #1e293b;
+}
+placessidebar row {
+    background-color: transparent;
+    color: #cbd5e1;
+    padding: 4px 8px;
+}
+placessidebar row:selected {
+    background-color: #082f49;
+    color: #00f0ff;
+    border-left: 2px solid #00f0ff;
+}
+.path-bar button, pathbar button {
+    background-image: none;
+    background-color: #111827;
+    color: #e2e8f0;
+    border: 1px solid #1e293b;
+}
+.path-bar button:checked, pathbar button:checked {
+    background-color: #082f49;
+    color: #00f0ff;
+    border-color: #00f0ff;
+}
+actionbar, .dialog-action-box {
+    background-color: #0f172a;
+    border-top: 1px solid #1e293b;
+    padding: 8px;
+}
+paned > separator {
+    background-color: #1e293b;
+}
+scrollbar, scrollbar trough {
+    background-color: #070b13;
+    border: none;
+}
+scrollbar slider {
+    background-color: #26354d;
+    border-radius: 6px;
+    min-width: 7px;
+    min-height: 7px;
+}
+scrollbar slider:hover {
+    background-color: #0284c7;
+}
+tooltip, tooltip.background {
+    background-image: none;
+    background-color: #0f172a;
+    color: #f8fafc;
+    border: 1px solid #00f0ff;
+    border-radius: 6px;
+}
+tooltip label {
+    color: #f8fafc;
 }
 .status-bar {
+    background-image: none;
     background-color: #070b13;
     border-top: 1px solid #1e293b;
     padding: 4px 10px;
@@ -192,12 +364,15 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
             self.preview_doc = None
 
     def _apply_css(self):
+        settings = Gtk.Settings.get_default()
+        if settings:
+            settings.set_property("gtk-application-prefer-dark-theme", True)
         provider = Gtk.CssProvider()
         provider.load_from_data(APP_CSS)
         screen = Gdk.Screen.get_default()
         if screen:
             Gtk.StyleContext.add_provider_for_screen(
-                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
             )
 
     def _build_headerbar(self):
@@ -1385,32 +1560,37 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
     # File Dialogs & Companion Launchers
     # ------------------------------------------------------------------
+    def _create_file_dialog(self, title: str, action: Gtk.FileChooserAction, accept_label: str) -> Gtk.FileChooserDialog:
+        dlg = Gtk.FileChooserDialog(title=title, parent=self, action=action)
+        dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, accept_label, Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        ok_btn = dlg.get_widget_for_response(Gtk.ResponseType.OK)
+        if ok_btn is not None:
+            ok_btn.get_style_context().add_class("neon-primary")
+        if self.active_pdf:
+            dlg.set_current_folder(os.path.dirname(self.active_pdf))
+        return dlg
+
     def _choose_open_pdfs(self, multiple: bool = False) -> List[str]:
-        dlg = Gtk.FileChooserDialog(
-            title="Select PDF File(s)" if multiple else "Open PDF File",
-            parent=self,
-            action=Gtk.FileChooserAction.OPEN,
+        dlg = self._create_file_dialog(
+            "Select PDF File(s)" if multiple else "Open PDF File",
+            Gtk.FileChooserAction.OPEN,
+            "Open",
         )
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
         dlg.set_select_multiple(multiple)
         flt = Gtk.FileFilter()
         flt.set_name("PDF Documents (*.pdf)")
         flt.add_mime_type("application/pdf")
         flt.add_pattern("*.pdf")
         dlg.add_filter(flt)
-        if self.active_pdf:
-            dlg.set_current_folder(os.path.dirname(self.active_pdf))
         res = dlg.get_filenames() if dlg.run() == Gtk.ResponseType.OK else []
         dlg.destroy()
         return res
 
     def _choose_save_pdf(self, title: str, default_name: str) -> Optional[str]:
-        dlg = Gtk.FileChooserDialog(title=title, parent=self, action=Gtk.FileChooserAction.SAVE)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
+        dlg = self._create_file_dialog(title, Gtk.FileChooserAction.SAVE, "Save")
         dlg.set_do_overwrite_confirmation(True)
         dlg.set_current_name(default_name)
-        if self.active_pdf:
-            dlg.set_current_folder(os.path.dirname(self.active_pdf))
         out = dlg.get_filename() if dlg.run() == Gtk.ResponseType.OK else None
         dlg.destroy()
         if out and not out.lower().endswith(".pdf"):
@@ -1418,10 +1598,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         return out
 
     def _choose_folder(self, title: str) -> Optional[str]:
-        dlg = Gtk.FileChooserDialog(title=title, parent=self, action=Gtk.FileChooserAction.SELECT_FOLDER)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
-        if self.active_pdf:
-            dlg.set_current_folder(os.path.dirname(self.active_pdf))
+        dlg = self._create_file_dialog(title, Gtk.FileChooserAction.SELECT_FOLDER, "Select Folder")
         out = dlg.get_filename() if dlg.run() == Gtk.ResponseType.OK else None
         dlg.destroy()
         return out

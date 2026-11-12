@@ -484,6 +484,38 @@ class TestPDFpanelGUI(unittest.TestCase):
         finally:
             win.destroy()
 
+    def test_standardized_dark_neon_theme_no_white_bleed(self):
+        if Gdk.Display.get_default() is None:
+            self.skipTest("Requires active display server")
+        from pdfpanel import APP_CSS, PDFpanelWindow
+
+        errors = []
+        provider = Gtk.CssProvider()
+        provider.connect("parsing-error", lambda _p, _sec, err: errors.append(str(err)))
+        provider.load_from_data(APP_CSS)
+        self.assertEqual(errors, [], f"CSS parsing errors: {errors}")
+
+        win = PDFpanelWindow()
+        try:
+            settings = Gtk.Settings.get_default()
+            self.assertTrue(settings.get_property("gtk-application-prefer-dark-theme"))
+
+            menu_bg = win.app_menu.get_style_context().get_background_color(Gtk.StateFlags.NORMAL)
+            self.assertLess(menu_bg.red, 0.15)
+            self.assertLess(menu_bg.green, 0.20)
+            self.assertLess(menu_bg.blue, 0.25)
+
+            dlg = win._create_file_dialog("Test Open", Gtk.FileChooserAction.OPEN, "Open")
+            try:
+                dlg_bg = dlg.get_style_context().get_background_color(Gtk.StateFlags.NORMAL)
+                self.assertLess(dlg_bg.red, 0.15)
+                ok_btn = dlg.get_widget_for_response(Gtk.ResponseType.OK)
+                self.assertTrue(ok_btn.get_style_context().has_class("neon-primary"))
+            finally:
+                dlg.destroy()
+        finally:
+            win.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()
