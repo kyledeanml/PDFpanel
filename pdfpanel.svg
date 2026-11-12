@@ -1,53 +1,119 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0b0f19"/>
-      <stop offset="55%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#131c31"/>
+    <!-- Darker Traditional Blue Gradient (Front PDF Sheet & Bookmark Accent) -->
+    <linearGradient id="pdfDarkBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#387eb8" stop-opacity="0.74"/>
+      <stop offset="100%" stop-color="#1e4263" stop-opacity="0.64"/>
     </linearGradient>
-    <linearGradient id="neonCyan" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00f0ff"/>
-      <stop offset="100%" stop-color="#0284c7"/>
+
+    <!-- Deeper Indigo-Blue Gradient (Back Stacked PDF Sheet) -->
+    <linearGradient id="pdfDeepBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2b6496" stop-opacity="0.64"/>
+      <stop offset="100%" stop-color="#15314b" stop-opacity="0.54"/>
     </linearGradient>
-    <linearGradient id="ribbonGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#00f0ff"/>
-      <stop offset="100%" stop-color="#38bdf8"/>
+
+    <!-- Crisp Cyan/Sky Bookmark Ribbon Gradient -->
+    <linearGradient id="pdfRibbon" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.78"/>
+      <stop offset="100%" stop-color="#387eb8" stop-opacity="0.68"/>
     </linearGradient>
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="4" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
+
+    <!-- Unassuming Matte Yoga Pad Surface Gradient (shared with PythonPanel) -->
+    <linearGradient id="yogaMatTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22436d" stop-opacity="0.58"/>
+      <stop offset="100%" stop-color="#152943" stop-opacity="0.50"/>
+    </linearGradient>
+
+    <!-- Yoga Pad Rolled End Gradient (shared with PythonPanel) -->
+    <linearGradient id="yogaRoll" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2d578b" stop-opacity="0.68"/>
+      <stop offset="100%" stop-color="#13253d" stop-opacity="0.58"/>
+    </linearGradient>
   </defs>
 
-  <!-- Outer rounded panel tile -->
-  <rect x="14" y="14" width="228" height="228" rx="44" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="4"/>
-  <rect x="20" y="20" width="216" height="216" rx="38" fill="none" stroke="url(#neonCyan)" stroke-opacity="0.35" stroke-width="2"/>
+  <!-- Unassuming Yoga Pad / Mat in Perspective (PythonPanel family base) -->
+  <g transform="translate(26, 62) scale(1.28)">
+    <!-- Subtle floor shadow beneath the yoga pad -->
+    <path d="M 48 258 L 288 258 L 328 214 L 92 214 Z"
+          fill="#060c17" fill-opacity="0.45"/>
 
-  <!-- Back stacked PDF sheet (Merge/Split motif) -->
-  <path d="M84 44 L170 44 L196 70 L196 184 C196 192 190 198 182 198 L84 198 C76 198 70 192 70 184 L70 58 C70 50 76 44 84 44 Z"
-        fill="#0f172a" stroke="#38bdf8" stroke-opacity="0.45" stroke-width="3"/>
+    <!-- Yoga Pad Thickness / Bottom Edge -->
+    <path d="M 44 248 L 282 248 L 322 204 L 322 211 L 282 255 L 44 255 Z"
+          fill="#1b3556" fill-opacity="0.65"
+          stroke="#387eb8" stroke-width="1.2" stroke-opacity="0.55" stroke-linejoin="round"/>
 
-  <!-- Front primary PDF sheet -->
-  <path d="M62 60 L148 60 L176 88 L176 202 C176 210 170 216 162 216 L62 216 C54 216 48 210 48 202 L48 74 C48 66 54 60 62 60 Z"
-        fill="#0b1220" stroke="url(#neonCyan)" stroke-width="4" filter="url(#glow)"/>
+    <!-- Yoga Pad Main Flat Surface -->
+    <path d="M 44 248 L 282 248 L 322 204 L 88 204 Z"
+          fill="url(#yogaMatTop)"
+          stroke="#387eb8" stroke-width="1.5" stroke-opacity="0.60" stroke-linejoin="round"/>
 
-  <!-- Folded corner -->
-  <path d="M148 60 L148 88 L176 88 Z" fill="#162238" stroke="url(#neonCyan)" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Subtle Non-Slip Texture Lines & Center Alignment Line on the Yoga Pad -->
+    <line x1="70" y1="226" x2="298" y2="226"
+          stroke="#5ba4e5" stroke-width="1.1" stroke-opacity="0.38" stroke-dasharray="6,5"/>
+    <line x1="176" y1="207" x2="152" y2="245"
+          stroke="#5ba4e5" stroke-width="1.0" stroke-opacity="0.32"/>
 
-  <!-- Bookmark ribbon -->
-  <path d="M126 60 L142 60 L142 114 L134 106 L126 114 Z" fill="url(#ribbonGrad)" filter="url(#glow)"/>
+    <!-- Rolled-Up End of the Yoga Pad (Left Side Cylinder) -->
+    <path d="M 38 236 C 34 236 31 240 31 245 C 31 250 34 254 38 254 L 82 208 C 78 208 75 204 75 199 C 75 194 78 190 82 190 Z"
+          fill="url(#yogaRoll)"
+          stroke="#387eb8" stroke-width="1.3" stroke-opacity="0.62"/>
 
-  <!-- Document lines & split dashed cut line -->
-  <line x1="68" y1="100" x2="116" y2="100" stroke="#e2e8f0" stroke-width="4" stroke-linecap="round"/>
-  <line x1="68" y1="118" x2="152" y2="118" stroke="#94a3b8" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- Yoga Pad Roll Spiral End-Cap -->
+    <ellipse cx="40" cy="245" rx="7.5" ry="9.5"
+             fill="#152943" fill-opacity="0.72"
+             stroke="#4b91d1" stroke-width="1.3" stroke-opacity="0.65"/>
+    <path d="M 40 241 C 42 241 43 243 43 245 C 43 247 41 249 39 249 C 37 249 36 246 37 244"
+          fill="none" stroke="#63b3ed" stroke-width="1.1" stroke-opacity="0.60" stroke-linecap="round"/>
 
-  <!-- Neon split cut line with chevron arrows -->
-  <line x1="40" y1="144" x2="188" y2="144" stroke="#00f0ff" stroke-width="3" stroke-dasharray="8 6" stroke-linecap="round" filter="url(#glow)"/>
+    <!-- Soft Contact Shadow Where the PDF Stack Rests on the Yoga Pad -->
+    <ellipse cx="182" cy="226" rx="64" ry="12.5"
+             fill="#07111f" fill-opacity="0.58"/>
+  </g>
 
-  <!-- PDF badge on lower half -->
-  <rect x="66" y="162" width="92" height="34" rx="8" fill="#082f49" stroke="#00d4ff" stroke-width="2.5"/>
-  <text x="112" y="185" text-anchor="middle" font-family="Sans, DejaVu Sans, Arial" font-weight="bold" font-size="20" fill="#ffffff" letter-spacing="2">PDF</text>
+  <!-- Translucent Darker-Blue Stacked & Split PDF Emblem Sitting on the Pad -->
+  <g transform="translate(136, 58) scale(1.36)">
+    <!-- Back Stacked PDF Sheet (Merge / Multi-File Motif) -->
+    <path d="M 56 16 L 138 16 L 164 42 L 164 156 C 164 162 159 167 153 167 L 56 167 C 50 167 45 162 45 156 L 45 27 C 45 21 50 16 56 16 Z"
+          fill="url(#pdfDeepBlue)"
+          stroke="#4b91d1" stroke-width="1.4" stroke-opacity="0.58" stroke-linejoin="round"/>
+    <!-- Back Sheet Dog-Ear Corner -->
+    <path d="M 138 16 L 138 42 L 164 42 Z"
+          fill="#2b6496" fill-opacity="0.55"
+          stroke="#63b3ed" stroke-width="1.1" stroke-opacity="0.58" stroke-linejoin="round"/>
+
+    <!-- Front Primary PDF Sheet -->
+    <path d="M 32 36 L 116 36 L 144 64 L 144 180 C 144 186 139 191 133 191 L 32 191 C 26 191 21 186 21 180 L 21 47 C 21 41 26 36 32 36 Z"
+          fill="url(#pdfDarkBlue)"
+          stroke="#63b3ed" stroke-width="1.6" stroke-opacity="0.72" stroke-linejoin="round"/>
+
+    <!-- Front Sheet Folded Corner -->
+    <path d="M 116 36 L 116 64 L 144 64 Z"
+          fill="#387eb8" fill-opacity="0.65"
+          stroke="#7dd3fc" stroke-width="1.2" stroke-opacity="0.70" stroke-linejoin="round"/>
+
+    <!-- Bookmark Ribbon -->
+    <path d="M 92 36 L 106 36 L 106 86 L 99 79 L 92 86 Z"
+          fill="url(#pdfRibbon)"
+          stroke="#bae6fd" stroke-width="1.0" stroke-opacity="0.75" stroke-linejoin="round"/>
+
+    <!-- Document Lines on Upper Section -->
+    <line x1="36" y1="62" x2="78" y2="62" stroke="#bae6fd" stroke-width="2.6" stroke-opacity="0.72" stroke-linecap="round"/>
+    <line x1="36" y1="76" x2="82" y2="76" stroke="#93c5fd" stroke-width="2.1" stroke-opacity="0.56" stroke-linecap="round"/>
+    <line x1="36" y1="90" x2="124" y2="90" stroke="#93c5fd" stroke-width="2.1" stroke-opacity="0.56" stroke-linecap="round"/>
+
+    <!-- Split Cut Line Across Sheet with Side Guide Chevrons -->
+    <line x1="13" y1="112" x2="152" y2="112"
+          stroke="#00f0ff" stroke-width="1.8" stroke-opacity="0.80"
+          stroke-dasharray="5,4" stroke-linecap="round"/>
+    <path d="M 10 108 L 16 112 L 10 116" fill="none" stroke="#bae6fd" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 155 108 L 149 112 L 155 116" fill="none" stroke="#bae6fd" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Translucent PDF Pill Badge on Lower Half -->
+    <rect x="38" y="130" width="88" height="36" rx="7"
+          fill="#0a0e1a" fill-opacity="0.38"
+          stroke="#7dd3fc" stroke-width="1.5" stroke-opacity="0.72"/>
+    <text x="82" y="155" text-anchor="middle"
+          font-family="Sans, DejaVu Sans, Arial" font-weight="bold" font-size="21"
+          fill="#bae6fd" fill-opacity="0.88" letter-spacing="2.2">PDF</text>
+  </g>
 </svg>
