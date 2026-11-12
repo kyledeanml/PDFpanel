@@ -304,11 +304,13 @@ class PopplerBridge:
                             title = any_act.title.decode("utf-8", errors="replace").strip()
                             title = re.sub(r"\s+", " ", title)
                         target_page = 1
-                        if any_act.type == 1:  # POPPLER_ACTION_GOTO_DEST
+                        if any_act.type == 2:  # POPPLER_ACTION_GOTO_DEST
                             goto_act = ctypes.cast(act_ptr, ctypes.POINTER(_PopplerActionGotoDest)).contents
                             if goto_act.dest:
                                 dest = goto_act.dest.contents
-                                if dest.type == 8 and dest.named_dest:  # NAMED
+                                if dest.page_num >= 1:
+                                    target_page = dest.page_num
+                                if dest.named_dest:
                                     resolved = cls._lib.poppler_document_find_dest(doc_handle, dest.named_dest)
                                     if resolved:
                                         try:
@@ -316,8 +318,6 @@ class PopplerBridge:
                                                 target_page = resolved.contents.page_num
                                         finally:
                                             cls._lib.poppler_dest_free(resolved)
-                                elif dest.page_num >= 1:
-                                    target_page = dest.page_num
                         if title:
                             results.append(BookmarkItem(title=title, page=max(1, target_page), level=level))
                     finally:
