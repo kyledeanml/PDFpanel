@@ -208,6 +208,40 @@ class TestPDFEngineOperations(unittest.TestCase):
             (1, 4, "Unit II • Algebra"),
         ])
 
+    def test_qpdf_c_api_fast_split_and_merge(self):
+        import time
+        from pdf_engine import QpdfBridge, PopplerBridge
+
+        self.assertTrue(QpdfBridge.is_available(), "libqpdf C library should load")
+        src = os.path.join(self.tmp_dir, "Fast30.pdf")
+        _make_sample_pdf(src, [f"Page Marker {i}" for i in range(1, 31)])
+
+        out_dir = os.path.join(self.tmp_dir, "fast_chunks")
+        t0 = time.perf_counter()
+        chunks = PDFEngine.split_pdf(src, out_dir, mode="chunks", value="3", prefix="fast")
+        elapsed = time.perf_counter() - t0
+
+        self.assertEqual(len(chunks), 10)
+        self.assertLess(elapsed, 1.0, f"C-level split took too long: {elapsed:.3f}s")
+        self.assertEqual(PDFEngine.inspect_pdf(chunks[0]).page_count, 3)
+        self.assertEqual(PDFEngine.inspect_pdf(chunks[-1]).page_count, 3)
+
+        # Verify lossless text extraction from middle chunk via Poppler C bridge
+        if PopplerBridge.is_available():
+            doc = PopplerBridge.open_document(chunks[4])
+            try:
+                txt, _rects = PopplerBridge.get_page_text_layout(doc, 0)
+            finally:
+                PopplerBridge.close_document(doc)
+            self.assertIn("Page Marker 13", txt)
+
+        # Fast C merge without bookmarks
+        merged_c = os.path.join(self.tmp_dir, "merged_c.pdf")
+        out_p, total_p = PDFEngine.merge_pdfs([(chunks[0], "all"), (chunks[4], "1,3")], merged_c, add_file_bookmarks=False)
+        self.assertEqual(out_p, merged_c)
+        self.assertEqual(total_p, 5)
+        self.assertEqual(PDFEngine.inspect_pdf(merged_c).page_count, 5)
+
 
 class TestPDFpanelGUI(unittest.TestCase):
     def setUp(self):

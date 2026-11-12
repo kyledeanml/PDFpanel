@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 PDFpanel Engine - Core PDF Inspection, Splitting, Merging, Compression, and Bookmarking
-Powered by Ghostscript (gs), Poppler (libpoppler-glib / pdfunite / pdfseparate), and Cairo.
+Powered by C-level libqpdf (ctypes) & libpoppler-glib, plus Ghostscript (gs) and Cairo.
 """
 
+from contextlib import contextmanager
 import ctypes
 import ctypes.util
 import math
@@ -338,6 +339,232 @@ class PopplerBridge:
         finally:
             cls._lib.poppler_index_iter_free(root_iter)
         return results
+
+
+class QpdfBridge:
+    """In-process ctypes bindings to libqpdf C API for ultra-fast lossless splitting & merging."""
+
+    _lib = None
+    _init_attempted = False
+    _available = False
+    _O_GENERATE = 2  # qpdf_o_generate
+
+    @classmethod
+    def _ensure_loaded(cls) -> bool:
+        if cls._init_attempted:
+            return cls._available
+        cls._init_attempted = True
+        try:
+            lib_path = ctypes.util.find_library("qpdf")
+            if not lib_path:
+                for cand in (
+                    "libqpdf.so.29",
+                    "/lib/x86_64-linux-gnu/libqpdf.so.29",
+                    "/usr/lib/x86_64-linux-gnu/libqpdf.so.29",
+                ):
+                    if os.path.exists(cand) or cand.startswith("lib"):
+                        lib_path = cand
+                        break
+            if not lib_path:
+                return False
+
+            lib = ctypes.CDLL(lib_path)
+            c_void_p = ctypes.c_void_p
+            c_char_p = ctypes.c_char_p
+            c_int = ctypes.c_int
+            c_uint = ctypes.c_uint
+            c_size_t = ctypes.c_size_t
+
+            lib.qpdf_init.argtypes = []
+            lib.qpdf_init.restype = c_void_p
+
+            lib.qpdf_cleanup.argtypes = [ctypes.POINTER(c_void_p)]
+            lib.qpdf_cleanup.restype = None
+
+            lib.qpdf_silence_errors.argtypes = [c_void_p]
+            lib.qpdf_silence_errors.restype = None
+
+            lib.qpdf_set_suppress_warnings.argtypes = [c_void_p, c_int]
+            lib.qpdf_set_suppress_warnings.restype = None
+
+            lib.qpdf_read.argtypes = [c_void_p, c_char_p, c_char_p]
+            lib.qpdf_read.restype = c_int
+
+            lib.qpdf_empty_pdf.argtypes = [c_void_p]
+            lib.qpdf_empty_pdf.restype = c_int
+
+            lib.qpdf_push_inherited_attributes_to_page.argtypes = [c_void_p]
+            lib.qpdf_push_inherited_attributes_to_page.restype = c_int
+
+            lib.qpdf_get_num_pages.argtypes = [c_void_p]
+            lib.qpdf_get_num_pages.restype = c_int
+
+            lib.qpdf_get_page_n.argtypes = [c_void_p, c_size_t]
+            lib.qpdf_get_page_n.restype = c_uint
+
+            lib.qpdf_add_page.argtypes = [c_void_p, c_void_p, c_uint, c_int]
+            lib.qpdf_add_page.restype = c_int
+
+            lib.qpdf_init_write.argtypes = [c_void_p, c_char_p]
+            lib.qpdf_init_write.restype = c_int
+
+            lib.qpdf_set_object_stream_mode.argtypes = [c_void_p, c_int]
+            lib.qpdf_set_object_stream_mode.restype = None
+
+            lib.qpdf_write.argtypes = [c_void_p]
+            lib.qpdf_write.restype = c_int
+
+            lib.qpdf_oh_release_all.argtypes = [c_void_p]
+            lib.qpdf_oh_release_all.restype = None
+
+            lib.qpdf_has_error.argtypes = [c_void_p]
+            lib.qpdf_has_error.restype = c_int
+
+            lib.qpdf_get_error.argtypes = [c_void_p]
+            lib.qpdf_get_error.restype = c_void_p
+
+            lib.qpdf_get_error_full_text.argtypes = [c_void_p, c_void_p]
+            lib.qpdf_get_error_full_text.restype = c_char_p
+
+            cls._lib = lib
+            cls._available = True
+            return True
+        except Exception:
+            cls._available = False
+            return False
+
+    @classmethod
+    def is_available(cls) -> bool:
+        return cls._ensure_loaded()
+
+    @classmethod
+    def _raise_if_error(cls, handle: ctypes.c_void_p, rc: int, action: str):
+        if cls._lib.qpdf_has_error(handle):
+            err_ptr = cls._lib.qpdf_get_error(handle)
+            msg = cls._lib.qpdf_get_error_full_text(handle, err_ptr)
+            detail = msg.decode("utf-8", errors="replace") if msg else f"error code {rc}"
+            raise RuntimeError(f"libqpdf {action} failed: {detail}")
+        if rc != 0:
+            raise RuntimeError(f"libqpdf {action} failed with code {rc}")
+
+    @classmethod
+    @contextmanager
+    def _handle(cls):
+        if not cls._ensure_loaded():
+            raise RuntimeError("libqpdf is not available")
+        h = ctypes.c_void_p(cls._lib.qpdf_init())
+        if not h:
+            raise RuntimeError("qpdf_init returned NULL")
+        cls._lib.qpdf_silence_errors(h)
+        cls._lib.qpdf_set_suppress_warnings(h, 1)
+        try:
+            yield h
+        finally:
+            try:
+                cls._lib.qpdf_oh_release_all(h)
+            finally:
+                cls._lib.qpdf_cleanup(ctypes.byref(h))
+
+    @classmethod
+    def _write_dst(cls, dst_h: ctypes.c_void_p, out_abs: str):
+        rc = cls._lib.qpdf_init_write(dst_h, os.fsencode(out_abs))
+        cls._raise_if_error(dst_h, rc, "init_write")
+        # Must be set after qpdf_init_write initializes the underlying QPDFWriter
+        cls._lib.qpdf_set_object_stream_mode(dst_h, cls._O_GENERATE)
+        rc = cls._lib.qpdf_write(dst_h)
+        cls._raise_if_error(dst_h, rc, "write")
+
+    @classmethod
+    def split_pages(cls, src_pdf: str, jobs: List[Tuple[str, List[int]]]) -> List[str]:
+        """Parse src_pdf once in C memory and write all requested page-subset PDFs cleanly."""
+        src_abs = os.path.abspath(src_pdf)
+        if not jobs:
+            return []
+        with cls._handle() as src_h:
+            rc = cls._lib.qpdf_read(src_h, os.fsencode(src_abs), None)
+            cls._raise_if_error(src_h, rc, "read")
+            rc = cls._lib.qpdf_push_inherited_attributes_to_page(src_h)
+            cls._raise_if_error(src_h, rc, "push_inherited_attributes")
+
+            total = cls._lib.qpdf_get_num_pages(src_h)
+            if total <= 0:
+                raise RuntimeError("Source PDF contains no pages.")
+            page_handles = [cls._lib.qpdf_get_page_n(src_h, i) for i in range(total)]
+
+            created: List[str] = []
+            for target_path, pages in jobs:
+                out_abs = os.path.abspath(target_path)
+                os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+                with cls._handle() as dst_h:
+                    rc = cls._lib.qpdf_empty_pdf(dst_h)
+                    cls._raise_if_error(dst_h, rc, "empty_pdf")
+                    for p in pages:
+                        if p < 1 or p > total:
+                            raise ValueError(f"Page {p} out of range 1..{total}")
+                        rc = cls._lib.qpdf_add_page(dst_h, src_h, page_handles[p - 1], 0)
+                        cls._raise_if_error(dst_h, rc, "add_page")
+                    cls._write_dst(dst_h, out_abs)
+                created.append(out_abs)
+            return created
+
+    @classmethod
+    def merge_pages(
+        cls,
+        items: List[Tuple[str, Optional[List[int]]]],
+        out_pdf: str,
+    ) -> int:
+        """Losslessly merge [(src_pdf, 1-based page list or None for all), ...] via libqpdf."""
+        out_abs = os.path.abspath(out_pdf)
+        os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+        opened_handles: Dict[str, Tuple[ctypes.c_void_p, List[int]]] = {}
+        total_written = 0
+
+        try:
+            with cls._handle() as dst_h:
+                rc = cls._lib.qpdf_empty_pdf(dst_h)
+                cls._raise_if_error(dst_h, rc, "empty_pdf")
+
+                for src_path, pages in items:
+                    src_abs = os.path.abspath(src_path)
+                    if src_abs not in opened_handles:
+                        sh = ctypes.c_void_p(cls._lib.qpdf_init())
+                        if not sh:
+                            raise RuntimeError("qpdf_init returned NULL")
+                        cls._lib.qpdf_silence_errors(sh)
+                        cls._lib.qpdf_set_suppress_warnings(sh, 1)
+                        try:
+                            rc = cls._lib.qpdf_read(sh, os.fsencode(src_abs), None)
+                            cls._raise_if_error(sh, rc, "read")
+                            rc = cls._lib.qpdf_push_inherited_attributes_to_page(sh)
+                            cls._raise_if_error(sh, rc, "push_inherited_attributes")
+                            n = cls._lib.qpdf_get_num_pages(sh)
+                            pg_handles = [cls._lib.qpdf_get_page_n(sh, i) for i in range(n)]
+                            opened_handles[src_abs] = (sh, pg_handles)
+                        except Exception:
+                            try:
+                                cls._lib.qpdf_oh_release_all(sh)
+                            finally:
+                                cls._lib.qpdf_cleanup(ctypes.byref(sh))
+                            raise
+
+                    src_h, pg_handles = opened_handles[src_abs]
+                    n_pages = len(pg_handles)
+                    selected = pages if pages is not None else list(range(1, n_pages + 1))
+                    for p in selected:
+                        if p < 1 or p > n_pages:
+                            raise ValueError(f"Page {p} out of range 1..{n_pages} for {src_abs}")
+                        rc = cls._lib.qpdf_add_page(dst_h, src_h, pg_handles[p - 1], 0)
+                        cls._raise_if_error(dst_h, rc, "add_page")
+                        total_written += 1
+
+                cls._write_dst(dst_h, out_abs)
+            return total_written
+        finally:
+            for sh, _ in opened_handles.values():
+                try:
+                    cls._lib.qpdf_oh_release_all(sh)
+                finally:
+                    cls._lib.qpdf_cleanup(ctypes.byref(sh))
 
 
 class PDFEngine:
@@ -912,34 +1139,69 @@ class PDFEngine:
         add_file_bookmarks: bool = True,
     ) -> Tuple[str, int]:
         """Merge multiple PDF files (optionally with page specs and per-file bookmarks).
+        Uses in-process libqpdf C API first, with Ghostscript/Poppler fallback.
         Returns (out_pdf_abs, total_pages).
         """
         if not sources:
             raise ValueError("Add at least one PDF file to merge.")
-        gs = cls._ensure_gs()
         out_abs = os.path.abspath(out_pdf)
         os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
 
+        resolved_items: List[Tuple[str, List[int], int]] = []
+        merged_bookmarks: List[BookmarkItem] = []
+        running_page = 1
+
+        for src_path, page_spec in sources:
+            info = cls.inspect_pdf(src_path)
+            selected = cls.parse_page_spec(page_spec, max(1, info.page_count))
+            resolved_items.append((os.path.abspath(src_path), selected, info.page_count))
+            if add_file_bookmarks:
+                label = os.path.splitext(os.path.basename(src_path))[0]
+                merged_bookmarks.append(BookmarkItem(title=label, page=running_page, level=1))
+            running_page += len(selected)
+
+        total_pages = max(0, running_page - 1)
+
+        if QpdfBridge.is_available():
+            try:
+                qpdf_items = [
+                    (src, None if sel == list(range(1, total + 1)) else sel)
+                    for src, sel, total in resolved_items
+                ]
+                if not (add_file_bookmarks and merged_bookmarks):
+                    QpdfBridge.merge_pages(qpdf_items, out_abs)
+                    return out_abs, total_pages
+
+                gs = cls._ensure_gs()
+                with tempfile.TemporaryDirectory(prefix="pdfpanel_merge_") as tmp_dir:
+                    tmp_raw = os.path.join(tmp_dir, "merged_raw.pdf")
+                    marks_ps = os.path.join(tmp_dir, "merge_marks.ps")
+                    QpdfBridge.merge_pages(qpdf_items, tmp_raw)
+                    with open(marks_ps, "w", encoding="utf-8") as f:
+                        f.write(cls._build_pdfmark(merged_bookmarks, max_page=max(1, total_pages)))
+                    proc = subprocess.run(
+                        [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={out_abs}", tmp_raw, marks_ps],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if proc.returncode == 0 and os.path.isfile(out_abs):
+                        return out_abs, total_pages
+            except Exception:
+                pass
+
+        # Fallback path via Poppler CLI / Ghostscript
+        gs = cls._ensure_gs()
         with tempfile.TemporaryDirectory(prefix="pdfpanel_merge_") as tmp_dir:
             prepared_files: List[str] = []
-            merged_bookmarks: List[BookmarkItem] = []
-            running_page = 1
-
-            for idx, (src_path, page_spec) in enumerate(sources, start=1):
-                info = cls.inspect_pdf(src_path)
-                selected = cls.parse_page_spec(page_spec, max(1, info.page_count))
-
-                is_full_contiguous = selected == list(range(1, info.page_count + 1))
-                if is_full_contiguous:
-                    prep = os.path.abspath(src_path)
+            for idx, (src_abs, selected, page_cnt) in enumerate(resolved_items, start=1):
+                if selected == list(range(1, page_cnt + 1)):
+                    prep = src_abs
                 else:
-                    # Extract exact page subset preserving order
                     prep = os.path.join(tmp_dir, f"subset_{idx}.pdf")
                     if shutil.which("pdfseparate") and shutil.which("pdfunite"):
                         sep_dir = os.path.join(tmp_dir, f"sep_{idx}")
                         os.makedirs(sep_dir, exist_ok=True)
                         subprocess.run(
-                            ["pdfseparate", os.path.abspath(src_path), os.path.join(sep_dir, "p_%05d.pdf")],
+                            ["pdfseparate", src_abs, os.path.join(sep_dir, "p_%05d.pdf")],
                             check=True, capture_output=True,
                         )
                         pick_files = [os.path.join(sep_dir, f"p_{pg:05d}.pdf") for pg in selected]
@@ -948,53 +1210,44 @@ class PDFEngine:
                         else:
                             subprocess.run(["pdfunite", *pick_files, prep], check=True, capture_output=True)
                     else:
-                        # Ghostscript PageList fallback
                         page_list = ",".join(str(p) for p in selected)
                         subprocess.run(
                             [
                                 gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite",
-                                f"-sPageList={page_list}", f"-sOutputFile={prep}",
-                                os.path.abspath(src_path),
+                                f"-sPageList={page_list}", f"-sOutputFile={prep}", src_abs,
                             ],
                             check=True, capture_output=True,
                         )
                 prepared_files.append(prep)
 
-                if add_file_bookmarks:
-                    label = os.path.splitext(os.path.basename(src_path))[0]
-                    merged_bookmarks.append(BookmarkItem(title=label, page=running_page, level=1))
-                running_page += len(selected)
-
             tmp_out = os.path.join(tmp_dir, "merged.pdf")
             if add_file_bookmarks and merged_bookmarks:
                 marks_ps = os.path.join(tmp_dir, "merge_marks.ps")
                 with open(marks_ps, "w", encoding="utf-8") as f:
-                    f.write(cls._build_pdfmark(merged_bookmarks, max_page=max(1, running_page - 1)))
-                cmd = [
-                    gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite",
-                    f"-sOutputFile={tmp_out}", *prepared_files, marks_ps,
-                ]
-                proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    f.write(cls._build_pdfmark(merged_bookmarks, max_page=max(1, total_pages)))
+                proc = subprocess.run(
+                    [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={tmp_out}", *prepared_files, marks_ps],
+                    capture_output=True, text=True, check=False,
+                )
                 if proc.returncode != 0 or not os.path.isfile(tmp_out):
                     raise RuntimeError(f"Merge failed:\n{proc.stderr or proc.stdout}")
-            else:
-                if shutil.which("pdfunite") and len(prepared_files) > 1:
-                    proc = subprocess.run(["pdfunite", *prepared_files, tmp_out], capture_output=True, text=True, check=False)
-                    if proc.returncode != 0:
-                        subprocess.run(
-                            [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={tmp_out}", *prepared_files],
-                            check=True, capture_output=True,
-                        )
-                elif len(prepared_files) == 1:
-                    shutil.copyfile(prepared_files[0], tmp_out)
-                else:
+            elif shutil.which("pdfunite") and len(prepared_files) > 1:
+                proc = subprocess.run(["pdfunite", *prepared_files, tmp_out], capture_output=True, text=True, check=False)
+                if proc.returncode != 0:
                     subprocess.run(
                         [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={tmp_out}", *prepared_files],
                         check=True, capture_output=True,
                     )
+            elif len(prepared_files) == 1:
+                shutil.copyfile(prepared_files[0], tmp_out)
+            else:
+                subprocess.run(
+                    [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={tmp_out}", *prepared_files],
+                    check=True, capture_output=True,
+                )
 
             shutil.move(tmp_out, out_abs)
-        return out_abs, max(0, running_page - 1)
+        return out_abs, total_pages
 
     # ----------------------------------------------------------------------
     # Split PDFs
@@ -1019,9 +1272,9 @@ class PDFEngine:
         - 'chunks': value is integer chunk size N (e.g. '1' for single pages, '5' for 5-page parts)
         - 'extract': value e.g. '1,3,5-8' combined into a single extracted PDF
         - 'bookmarks': split at top-level bookmark / auto-chapter boundaries
+        Uses in-process libqpdf C API for fast lossless splitting with Ghostscript/Poppler fallback.
         Returns list of generated PDF file paths.
         """
-        gs = cls._ensure_gs()
         info = cls.inspect_pdf(src_pdf)
         total = max(1, info.page_count)
         base = prefix or cls._sanitize_slug(os.path.splitext(os.path.basename(src_pdf))[0])
@@ -1071,17 +1324,29 @@ class PDFEngine:
         else:
             raise ValueError(f"Unknown split mode: {mode}")
 
+        jobs = [(os.path.join(out_dir, filename), pages) for filename, pages in groups]
+
+        if QpdfBridge.is_available():
+            try:
+                return QpdfBridge.split_pages(src_pdf, jobs)
+            except Exception:
+                pass
+
+        return cls._split_jobs_fallback(src_pdf, jobs)
+
+    @classmethod
+    def _split_jobs_fallback(cls, src_pdf: str, jobs: List[Tuple[str, List[int]]]) -> List[str]:
+        """Subprocess fallback for split_pdf using pdfseparate/pdfunite/Ghostscript."""
+        gs = cls._ensure_gs()
         created: List[str] = []
         with tempfile.TemporaryDirectory(prefix="pdfpanel_split_") as tmp_dir:
             use_poppler_tools = bool(shutil.which("pdfseparate") and shutil.which("pdfunite"))
             sep_dir = os.path.join(tmp_dir, "pages")
             separated = False
 
-            for filename, pages in groups:
-                target = os.path.join(out_dir, filename)
+            for target, pages in jobs:
                 is_contig = pages == list(range(pages[0], pages[-1] + 1)) and len(pages) == (pages[-1] - pages[0] + 1)
                 if is_contig and not (len(pages) > 1 and not use_poppler_tools):
-                    # Ghostscript range is fast & self-contained; or pdfseparate for single page
                     if len(pages) == 1 and shutil.which("pdfseparate"):
                         subprocess.run(
                             ["pdfseparate", "-f", str(pages[0]), "-l", str(pages[0]),
