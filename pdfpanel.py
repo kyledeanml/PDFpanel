@@ -169,6 +169,8 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self._init_drag_and_drop()
         self._init_watermarks()
         self.show_all()
+        self._on_split_mode_changed()
+        self._on_comp_preset_changed()
         self._update_preview_controls()
 
         if initial_files:
@@ -413,7 +415,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self.combo_split_mode.append("chunks", "Fixed Page Chunks (every N pages)")
         self.combo_split_mode.append("ranges", "Custom Page Ranges (semicolon separated)")
         self.combo_split_mode.append("extract", "Extract Specific Pages into One PDF")
-        self.combo_split_mode.append("bookmarks", "Split by Bookmarks / Auto-Detected Chapters")
+        self.combo_split_mode.append("bookmarks", "Split by Chapter (from Bookmarks / Auto-Chapters)")
         self.combo_split_mode.set_active_id("chunks")
         self.combo_split_mode.connect("changed", self._on_split_mode_changed)
         row_mode.pack_start(self.combo_split_mode, True, True, 0)
@@ -429,6 +431,26 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self.split_param_box.pack_start(self.spin_split_chunks, False, False, 0)
         self.split_param_box.pack_start(self.entry_split_spec, True, True, 0)
         card.pack_start(self.split_param_box, False, False, 0)
+
+        self.row_split_chapters = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        row_bm_lvl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row_bm_lvl.pack_start(Gtk.Label(label="Chapter Level:"), False, False, 0)
+        self.combo_split_bm_level = Gtk.ComboBoxText()
+        self.combo_split_bm_level.append("1", "Top-Level Chapters (Level 1)")
+        self.combo_split_bm_level.append("2", "Chapters & Subsections (Levels 1–2)")
+        self.combo_split_bm_level.append("0", "All Bookmark Entries (Every Level)")
+        self.combo_split_bm_level.set_active_id("1")
+        self.combo_split_bm_level.connect("changed", lambda *_: self._refresh_split_chapter_preview())
+        row_bm_lvl.pack_start(self.combo_split_bm_level, True, True, 0)
+        self.row_split_chapters.pack_start(row_bm_lvl, False, False, 0)
+
+        self.chk_split_front_matter = Gtk.CheckButton(
+            label="Include leading pages before first chapter as 00_front_matter.pdf"
+        )
+        self.chk_split_front_matter.set_active(True)
+        self.chk_split_front_matter.connect("toggled", lambda *_: self._refresh_split_chapter_preview())
+        self.row_split_chapters.pack_start(self.chk_split_front_matter, False, False, 0)
+        card.pack_start(self.row_split_chapters, False, False, 0)
 
         row_prefix = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row_prefix.pack_start(Gtk.Label(label="Filename Prefix:"), False, False, 0)
@@ -584,6 +606,13 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self.lbl_bm_source.get_style_context().add_class("muted-label")
         self.lbl_bm_source.set_xalign(0.0)
         foot.pack_start(self.lbl_bm_source, True, True, 0)
+
+        self.btn_bm_split_chapters = Gtk.Button(label="Split by Chapters...")
+        self.btn_bm_split_chapters.set_tooltip_text(
+            "Switch to Split by Chapter using these bookmarks and choose an output folder"
+        )
+        self.btn_bm_split_chapters.connect("clicked", lambda *_: self.on_split_by_bookmarks_studio())
+        foot.pack_end(self.btn_bm_split_chapters, False, False, 0)
 
         self.btn_bm_save = Gtk.Button(label="Embed & Save PDF...")
         self.btn_bm_save.get_style_context().add_class("neon-primary")
@@ -999,23 +1028,68 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
             self.lbl_split_param.show()
             self.spin_split_chunks.show()
             self.entry_split_spec.hide()
+            self.row_split_chapters.hide()
         elif mode == "ranges":
             self.lbl_split_param.set_text("Page ranges (; separated):")
             self.entry_split_spec.set_placeholder_text("e.g. 1-3; 4-8; 9-12")
             self.lbl_split_param.show()
             self.spin_split_chunks.hide()
             self.entry_split_spec.show()
+            self.row_split_chapters.hide()
         elif mode == "extract":
             self.lbl_split_param.set_text("Pages to extract:")
             self.entry_split_spec.set_placeholder_text("e.g. 1, 3, 5-8")
             self.lbl_split_param.show()
             self.spin_split_chunks.hide()
             self.entry_split_spec.show()
+            self.row_split_chapters.hide()
         else:
-            self.lbl_split_param.set_text("Uses embedded PDF bookmarks or auto-detected chapters.")
+            self.lbl_split_param.set_text(
+                "Uses Bookmark Studio / embedded PDF bookmarks (or auto-detected chapters)."
+            )
             self.lbl_split_param.show()
             self.spin_split_chunks.hide()
             self.entry_split_spec.hide()
+            self.row_split_chapters.show()
+            self._refresh_split_chapter_preview()
+
+    def _refresh_split_chapter_preview(self):
+        if getattr(self, "combo_split_mode", None) is None or self.combo_split_mode.get_active_id() != "bookmarks":
+            return
+        if not self.active_pdf:
+            self.lbl_split_result.set_text(
+                "Open a PDF to preview chapters from embedded or Bookmark Studio bookmarks."
+            )
+            return
+        try:
+            lvl = int(self.combo_split_bm_level.get_active_id() or "1")
+            include_fm = self.chk_split_front_matter.get_active()
+            studio_bms = self._collect_bm_tree() or None
+            plan = PDFEngine.plan_bookmark_chapter_splits(
+                self.active_pdf,
+                bookmarks=studio_bms,
+                max_level=lvl,
+                include_front_matter=include_fm,
+            )
+            preview_parts = []
+            for fname, pages in plan[:5]:
+                p_lbl = f"p.{pages[0]}" if len(pages) == 1 else f"p.{pages[0]}-{pages[-1]}"
+                preview_parts.append(f"{fname} ({p_lbl})")
+            more = f", +{len(plan) - 5} more" if len(plan) > 5 else ""
+            self.lbl_split_result.set_text(
+                f"Planned {len(plan)} chapter PDF(s): " + ", ".join(preview_parts) + more
+            )
+        except Exception as e:
+            self.lbl_split_result.set_text(str(e))
+
+    def on_split_by_bookmarks_studio(self):
+        if not self.active_pdf:
+            self._show_error("Open a PDF file first.")
+            return
+        self.combo_split_mode.set_active_id("bookmarks")
+        self.tool_stack.set_visible_child_name("split")
+        self._refresh_split_chapter_preview()
+        self.on_run_split()
 
     def on_run_split(self):
         if not self.active_pdf:
@@ -1027,9 +1101,21 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         mode = self.combo_split_mode.get_active_id() or "chunks"
         val = str(int(self.spin_split_chunks.get_value())) if mode == "chunks" else self.entry_split_spec.get_text().strip()
         prefix = self.entry_split_prefix.get_text().strip() or None
+        studio_bms = (self._collect_bm_tree() or None) if mode == "bookmarks" else None
+        bm_level = int(self.combo_split_bm_level.get_active_id() or "1") if mode == "bookmarks" else 1
+        include_fm = self.chk_split_front_matter.get_active() if mode == "bookmarks" else True
         self.set_status("Splitting PDF...")
         self._run_async(
-            lambda: PDFEngine.split_pdf(self.active_pdf, out_dir, mode=mode, value=val, prefix=prefix),
+            lambda: PDFEngine.split_pdf(
+                self.active_pdf,
+                out_dir,
+                mode=mode,
+                value=val,
+                prefix=prefix,
+                bookmarks=studio_bms,
+                bookmark_level=bm_level,
+                include_front_matter=include_fm,
+            ),
             lambda created: self._on_split_finished(created, out_dir),
         )
 
@@ -1099,6 +1185,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
             row_iter = self.bm_store.append(parent, [it.title, max(1, int(it.page)), lvl, self._level_badge(lvl)])
             stack.append((lvl, row_iter))
         self.bm_tree.expand_all()
+        self._refresh_split_chapter_preview()
 
     def _collect_bm_tree(self) -> List[BookmarkItem]:
         items: List[BookmarkItem] = []

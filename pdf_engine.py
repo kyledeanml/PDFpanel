@@ -1259,6 +1259,56 @@ class PDFEngine:
         return slug[:60] or "section"
 
     @classmethod
+    def plan_bookmark_chapter_splits(
+        cls,
+        src_pdf: str,
+        bookmarks: Optional[List[BookmarkItem]] = None,
+        max_level: int = 1,
+        include_front_matter: bool = True,
+    ) -> List[Tuple[str, List[int]]]:
+        """Compute (filename, 1-based page list) chapter groups from bookmarks or auto-chapters.
+
+        - max_level=1 selects Level 1 chapters (falling back to shallowest bookmark level if none are L1).
+        - max_level=2 selects Levels 1-2 (chapters and subsections).
+        - max_level<=0 includes all bookmark levels.
+        """
+        info = cls.inspect_pdf(src_pdf)
+        total = max(1, info.page_count)
+        bms = list(bookmarks) if bookmarks is not None else cls.get_bookmarks(src_pdf)
+        if not bms:
+            bms = cls.auto_detect_chapters(src_pdf)
+        if not bms:
+            raise ValueError("No bookmarks or chapters found to split by.")
+
+        if max_level > 0:
+            selected = [b for b in bms if b.level <= max_level]
+            if not selected:
+                min_lvl = min(b.level for b in bms)
+                selected = [b for b in bms if b.level <= min_lvl]
+        else:
+            selected = bms
+
+        seen_p = set()
+        starts: List[Tuple[int, str]] = []
+        for b in sorted(selected, key=lambda x: (x.page, x.level)):
+            pg = max(1, min(b.page, total))
+            if pg not in seen_p:
+                seen_p.add(pg)
+                starts.append((pg, b.title))
+
+        groups: List[Tuple[str, List[int]]] = []
+        if include_front_matter and starts and starts[0][0] > 1:
+            groups.append(("00_front_matter.pdf", list(range(1, starts[0][0]))))
+
+        for idx, (sp, title) in enumerate(starts, start=1):
+            ep = (starts[idx][0] - 1) if (idx < len(starts)) else total
+            if ep < sp:
+                ep = sp
+            slug = cls._sanitize_slug(title)
+            groups.append((f"{idx:02d}_{slug}.pdf", list(range(sp, ep + 1))))
+        return groups
+
+    @classmethod
     def split_pdf(
         cls,
         src_pdf: str,
@@ -1266,12 +1316,15 @@ class PDFEngine:
         mode: str = "chunks",  # "ranges" | "chunks" | "extract" | "bookmarks"
         value: str = "1",
         prefix: Optional[str] = None,
+        bookmarks: Optional[List[BookmarkItem]] = None,
+        bookmark_level: int = 1,
+        include_front_matter: bool = True,
     ) -> List[str]:
         """Split a PDF according to mode:
         - 'ranges': value e.g. '1-3; 4-7; 8-10' or comma/semicolon groups
         - 'chunks': value is integer chunk size N (e.g. '1' for single pages, '5' for 5-page parts)
         - 'extract': value e.g. '1,3,5-8' combined into a single extracted PDF
-        - 'bookmarks': split at top-level bookmark / auto-chapter boundaries
+        - 'bookmarks': split at bookmark / chapter boundaries (supports bookmark_level & front matter)
         Uses in-process libqpdf C API for fast lossless splitting with Ghostscript/Poppler fallback.
         Returns list of generated PDF file paths.
         """
@@ -1301,26 +1354,12 @@ class PDFEngine:
                 pages = cls.parse_page_spec(rg, total)
                 groups.append((f"{base}_part_{idx:02d}.pdf", pages))
         elif mode == "bookmarks":
-            bms = cls.get_bookmarks(src_pdf)
-            if not bms:
-                bms = cls.auto_detect_chapters(src_pdf)
-            top_bms = [b for b in bms if b.level == 1] or bms
-            if not top_bms:
-                raise ValueError("No bookmarks or chapters found to split by.")
-            # Deduplicate starting pages cleanly in ascending order
-            seen_p = set()
-            starts: List[Tuple[int, str]] = []
-            for b in sorted(top_bms, key=lambda x: x.page):
-                pg = max(1, min(b.page, total))
-                if pg not in seen_p:
-                    seen_p.add(pg)
-                    starts.append((pg, b.title))
-            for idx, (sp, title) in enumerate(starts):
-                ep = (starts[idx + 1][0] - 1) if (idx + 1 < len(starts)) else total
-                if ep < sp:
-                    ep = sp
-                slug = cls._sanitize_slug(title)
-                groups.append((f"{idx + 1:02d}_{slug}.pdf", list(range(sp, ep + 1))))
+            groups = cls.plan_bookmark_chapter_splits(
+                src_pdf,
+                bookmarks=bookmarks,
+                max_level=bookmark_level,
+                include_front_matter=include_front_matter,
+            )
         else:
             raise ValueError(f"Unknown split mode: {mode}")
 

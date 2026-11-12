@@ -144,6 +144,28 @@ class TestPDFEngineOperations(unittest.TestCase):
         self.assertEqual([PDFEngine.inspect_pdf(f).page_count for f in chap_files], [1, 2, 2])
         self.assertIn("Chapter_1_Setup", os.path.basename(chap_files[1]))
 
+        # 5. Split by chapter up to Level 2 (chapters + subsections -> 4 PDFs: p1, p2, p3, p4-5)
+        d_bm_l2 = os.path.join(self.tmp_dir, "out_bookmarks_l2")
+        sub_files = PDFEngine.split_pdf(bookmarked, d_bm_l2, mode="bookmarks", bookmark_level=2)
+        self.assertEqual(len(sub_files), 4)
+        self.assertEqual([PDFEngine.inspect_pdf(f).page_count for f in sub_files], [1, 1, 1, 2])
+
+        # 6. Split with leading front matter before Chapter 1 + custom unsaved bookmarks
+        d_fm = os.path.join(self.tmp_dir, "out_front_matter")
+        custom_bms = [
+            BookmarkItem("Chapter 1 Alpha", page=3, level=1),
+            BookmarkItem("Chapter 2 Beta", page=5, level=1),
+        ]
+        fm_files = PDFEngine.split_pdf(
+            src, d_fm, mode="bookmarks", bookmarks=custom_bms, include_front_matter=True
+        )
+        self.assertEqual([os.path.basename(p) for p in fm_files], [
+            "00_front_matter.pdf",
+            "01_Chapter_1_Alpha.pdf",
+            "02_Chapter_2_Beta.pdf",
+        ])
+        self.assertEqual([PDFEngine.inspect_pdf(f).page_count for f in fm_files], [2, 2, 1])
+
     def test_compress_pdf_reduces_size_and_preserves_pages(self):
         src = os.path.join(self.tmp_dir, "heavy.pdf")
         out = os.path.join(self.tmp_dir, "compressed.pdf")
@@ -357,6 +379,45 @@ class TestPDFpanelGUI(unittest.TestCase):
             # Verify non-empty alpha pixels were painted by the watermark
             data = surface.get_data()
             self.assertTrue(any(b != 0 for b in data))
+        finally:
+            win.destroy()
+
+    def test_ui_split_by_chapter_from_bookmarks_controls(self):
+        if Gdk.Display.get_default() is None:
+            self.skipTest("Requires active display server")
+        from pdfpanel import PDFpanelWindow
+
+        raw = os.path.join(self.tmp_dir, "Chapters.pdf")
+        book = os.path.join(self.tmp_dir, "ChaptersBookmarked.pdf")
+        _make_sample_pdf(raw, ["Cover", "Ch1 Start", "Ch1 Sub", "Ch2 Start"])
+        PDFEngine.write_bookmarks(
+            raw,
+            book,
+            [
+                BookmarkItem("Chapter One", page=2, level=1),
+                BookmarkItem("Section 1.1", page=3, level=2),
+                BookmarkItem("Chapter Two", page=4, level=1),
+            ],
+        )
+
+        win = PDFpanelWindow(initial_files=[book])
+        try:
+            for _ in range(15):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+
+            self.assertFalse(win.row_split_chapters.get_visible())
+            win.tool_stack.set_visible_child_name("split")
+            win.combo_split_mode.set_active_id("bookmarks")
+            self.assertTrue(win.row_split_chapters.get_visible())
+            self.assertIn("00_front_matter.pdf", win.lbl_split_result.get_text())
+            self.assertIn("Planned 3 chapter PDF(s)", win.lbl_split_result.get_text())
+
+            win.combo_split_bm_level.set_active_id("2")
+            self.assertIn("Planned 4 chapter PDF(s)", win.lbl_split_result.get_text())
+
+            win.chk_split_front_matter.set_active(False)
+            self.assertIn("Planned 3 chapter PDF(s)", win.lbl_split_result.get_text())
         finally:
             win.destroy()
 
