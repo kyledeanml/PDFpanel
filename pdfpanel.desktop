@@ -1,0 +1,18 @@
+[Desktop Entry]
+Name=PDFpanel
+Comment=Split, merge, compress, and bookmark PDF files cleanly on Linux Mint Cinnamon
+GenericName=PDF Toolkit & Bookmark Studio
+Exec=run.sh %F
+Icon=pdfpanel
+Terminal=false
+Type=Application
+Categories=GTK;GNOME;Office;Utility;
+MimeType=application/pdf;
+StartupNotify=true
+StartupWMClass=pdfpanel
+Keywords=pdf;merge;split;compress;bookmark;outline;chapters;ghostscript;poppler;
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=Open a New Window
+Exec=run.sh
