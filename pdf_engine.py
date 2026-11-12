@@ -811,7 +811,8 @@ class PDFEngine:
     @classmethod
     def _strip_existing_outlines(cls, src_pdf: str, temp_dir: str) -> str:
         """Return path to a temp copy with catalog /Outlines removed cleanly."""
-        raw = open(src_pdf, "rb").read()
+        with open(src_pdf, "rb") as f:
+            raw = f.read()
         pattern = re.compile(rb"/Outlines\s+\d+\s+\d+\s+R")
         if pattern.search(raw):
             cleaned = pattern.sub(lambda m: b" " * len(m.group(0)), raw)
@@ -831,7 +832,8 @@ class PDFEngine:
             ],
             check=True, capture_output=True,
         )
-        raw2 = open(uncomp, "rb").read()
+        with open(uncomp, "rb") as f:
+            raw2 = f.read()
         cleaned2 = pattern.sub(lambda m: b" " * len(m.group(0)), raw2)
         out_clean2 = os.path.join(temp_dir, "stripped.pdf")
         with open(out_clean2, "wb") as f:
