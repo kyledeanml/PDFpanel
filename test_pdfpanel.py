@@ -300,6 +300,32 @@ class TestPDFpanelGUI(unittest.TestCase):
         finally:
             win.destroy()
 
+    def test_watermark_logo_renders_in_ui(self):
+        if Gdk.Display.get_default() is None:
+            self.skipTest("Requires active display server")
+        import cairo
+        from pdfpanel import PDFpanelWindow
+
+        pix = PDFpanelWindow._get_watermark_pixbuf(320)
+        self.assertIsNotNone(pix)
+        self.assertEqual(pix.get_width(), 320)
+
+        win = PDFpanelWindow()
+        try:
+            for _ in range(15):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 600, 500)
+            cr = cairo.Context(surface)
+            self.assertFalse(win._on_draw_watermark(win.merge_tree, cr))
+            self.assertFalse(win._on_draw_preview_watermark(win.scroll_prev, cr))
+            # Verify non-empty alpha pixels were painted by the watermark
+            data = surface.get_data()
+            self.assertTrue(any(b != 0 for b in data))
+        finally:
+            win.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

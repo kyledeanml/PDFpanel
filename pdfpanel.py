@@ -15,6 +15,7 @@ from urllib.parse import unquote
 sys.dont_write_bytecode = True
 
 import gi
+import cairo
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
@@ -138,6 +139,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
     """Main application window for PDFpanel."""
 
     APP_NAME = "PDFpanel"
+    _watermark_pixbufs: dict = {}
 
     def __init__(self, app: Optional[Gtk.Application] = None, initial_files: Optional[List[str]] = None):
         super().__init__(application=app, title=self.APP_NAME)
@@ -165,6 +167,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
         self._build_layout()
         self._bind_shortcuts()
         self._init_drag_and_drop()
+        self._init_watermarks()
         self.show_all()
         self._update_preview_controls()
 
@@ -394,6 +397,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
     def _build_split_tab(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.split_box = box
 
         hdr = Gtk.Label(label="SPLIT PDF INTO PARTS, RANGES, OR CHAPTERS")
         hdr.get_style_context().add_class("section-title")
@@ -456,6 +460,7 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
     def _build_compress_tab(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.compress_box = box
 
         hdr = Gtk.Label(label="COMPRESS & OPTIMIZE PDF FILE SIZE")
         hdr.get_style_context().add_class("section-title")
@@ -750,6 +755,66 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
                     f"Loaded {os.path.basename(paths[0])} and queued {added_count} PDFs for Merge."
                 )
         return True
+
+    @classmethod
+    def _get_watermark_pixbuf(cls, size: int = 340) -> Optional[GdkPixbuf.Pixbuf]:
+        """Load and cache the official PDFpanel SVG watermark at the requested size."""
+        if size not in cls._watermark_pixbufs:
+            svg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pdfpanel.svg")
+            pix = None
+            if os.path.exists(svg_path):
+                try:
+                    pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(svg_path, size, size, True)
+                except Exception:
+                    pix = None
+            cls._watermark_pixbufs[size] = pix
+        return cls._watermark_pixbufs[size]
+
+    def _init_watermarks(self):
+        self.merge_tree.connect_after("draw", self._on_draw_watermark, 0.28, 320, 0.55, 0.58)
+        self.bm_tree.connect_after("draw", self._on_draw_watermark, 0.28, 320, 0.55, 0.58)
+        self.split_box.connect("draw", self._on_draw_watermark, 0.30, 320, 0.54, 0.84)
+        self.compress_box.connect("draw", self._on_draw_watermark, 0.30, 320, 0.54, 0.84)
+        self.scroll_prev.connect_after("draw", self._on_draw_preview_watermark)
+
+    def _on_draw_watermark(
+        self,
+        widget: Gtk.Widget,
+        cr: cairo.Context,
+        alpha: float = 0.30,
+        target_size: int = 320,
+        x_frac: float = 0.55,
+        y_frac: float = 0.58,
+    ) -> bool:
+        """Render the translucent PDFpanel yoga-pad watermark on workspace canvases."""
+        alloc = widget.get_allocation()
+        if alloc.width < 140 or alloc.height < 140:
+            return False
+        fit_size = min(target_size, int(min(alloc.width, alloc.height) * 0.72))
+        bucket = max(120, (fit_size // 20) * 20)
+        pixbuf = self._get_watermark_pixbuf(bucket)
+        if pixbuf is None:
+            return False
+
+        try:
+            pw = pixbuf.get_width()
+            ph = pixbuf.get_height()
+            x = max(12.0, (alloc.width - pw) * x_frac)
+            y = max(12.0, (alloc.height - ph) * y_frac)
+            cr.save()
+            cr.set_operator(cairo.OPERATOR_OVER)
+            Gdk.cairo_set_source_pixbuf(cr, pixbuf, x, y)
+            cr.paint_with_alpha(alpha)
+            cr.restore()
+        except Exception:
+            pass
+        return False
+
+    def _on_draw_preview_watermark(self, widget: Gtk.Widget, cr: cairo.Context) -> bool:
+        """Show the centered PDFpanel logo watermark in the preview pane until a PDF is loaded."""
+        if self.active_pdf is not None and self.preview_doc is not None:
+            return False
+        return self._on_draw_watermark(widget, cr, alpha=0.42, target_size=260, x_frac=0.5, y_frac=0.5)
 
     def load_active_pdf(self, pdf_path: str):
         abs_p = os.path.abspath(pdf_path)
