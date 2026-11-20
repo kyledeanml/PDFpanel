@@ -517,5 +517,92 @@ class TestPDFpanelGUI(unittest.TestCase):
             win.destroy()
 
 
+class TestSecurityAndIntegrityHardening(unittest.TestCase):
+    """Penetration, attack-vector, and data-integrity tests for PDFpanel."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="pdfpanel_sec_test_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_in_place_bookmark_and_merge_save_atomicity_no_zero_byte_corruption(self):
+        import stat
+        pdf_path = os.path.join(self.tmp_dir, "inplace.pdf")
+        _make_sample_pdf(pdf_path, ["Page 1", "Page 2", "Page 3", "Page 4"])
+        os.chmod(pdf_path, 0o644)
+
+        bms = [
+            BookmarkItem(title="Part I", page=1, level=1),
+            BookmarkItem(title="Part II", page=3, level=1),
+        ]
+        # 1. In-place bookmark save (src_pdf == out_pdf) must not truncate open source
+        PDFEngine.write_bookmarks(pdf_path, pdf_path, bms, replace_existing=True)
+        info = PDFEngine.inspect_pdf(pdf_path)
+        self.assertEqual(info.page_count, 4)
+        self.assertGreater(info.file_size, 100)
+        self.assertEqual(stat.S_IMODE(os.stat(pdf_path).st_mode), 0o644)
+        loaded_bms = PDFEngine.get_bookmarks(pdf_path)
+        self.assertEqual([(b.title, b.page) for b in loaded_bms], [("Part I", 1), ("Part II", 3)])
+
+        # 2. In-place merge subset (src_pdf == out_pdf) must succeed without truncating source
+        _, merged_count = PDFEngine.merge_pdfs([(pdf_path, "1-2")], pdf_path)
+        self.assertEqual(merged_count, 2)
+        self.assertEqual(PDFEngine.inspect_pdf(pdf_path).page_count, 2)
+
+    def test_parse_page_spec_oom_reverse_range_and_bounds_protection(self):
+        # 1. Reverse astronomical range '999999999-1' on 5-page PDF must clamp to [5,4,3,2,1], not OOM
+        pages = PDFEngine.parse_page_spec("999999999-1", max_pages=5)
+        self.assertEqual(pages, [5, 4, 3, 2, 1])
+
+        # 2. Completely out-of-range specification must raise ValueError
+        with self.assertRaises(ValueError):
+            PDFEngine.parse_page_spec("500-600", max_pages=5)
+
+        # 3. Repeated ranges exceeding MAX_RESOLVED_PAGES must raise ValueError
+        orig_cap = PDFEngine.MAX_RESOLVED_PAGES
+        try:
+            PDFEngine.MAX_RESOLVED_PAGES = 50
+            with self.assertRaises(ValueError):
+                PDFEngine.parse_page_spec(",".join(["1-10"] * 10), max_pages=10)
+        finally:
+            PDFEngine.MAX_RESOLVED_PAGES = orig_cap
+
+    def test_split_pdf_path_traversal_prefix_rejection(self):
+        pdf_path = os.path.join(self.tmp_dir, "src.pdf")
+        out_dir = os.path.join(self.tmp_dir, "out")
+        _make_sample_pdf(pdf_path, ["A", "B"])
+
+        for bad_prefix in ("../../escaped", "../outside", "/tmp/evil", "sub/nested", "null\x00p"):
+            with self.subTest(prefix=bad_prefix):
+                with self.assertRaises(ValueError):
+                    PDFEngine.split_pdf(pdf_path, out_dir, mode="chunks", value="1", prefix=bad_prefix)
+
+    def test_postscript_pdfmark_newline_and_control_char_injection_prevention(self):
+        hostile_title = "Chapter 1)\n[/Title (Injected) /Page 1 /OUT pdfmark\r\x00(/etc/passwd) (r) file"
+        encoded = PDFEngine._encode_pdf_text(hostile_title)
+        self.assertNotIn("\n", encoded)
+        self.assertNotIn("\r", encoded)
+        self.assertNotIn("\x00", encoded)
+
+        pm = PDFEngine._build_pdfmark([BookmarkItem(title=hostile_title, page=1, level=1)], max_page=5)
+        # Exactly 2 lines: DOCVIEW header + 1 single-line /OUT pdfmark
+        non_empty_lines = [l for l in pm.splitlines() if l.strip()]
+        self.assertEqual(len(non_empty_lines), 2)
+
+    def test_fifo_non_pdf_directory_and_null_byte_rejection(self):
+        fifo_path = os.path.join(self.tmp_dir, "trap.fifo")
+        os.mkfifo(fifo_path)
+
+        fake_pdf = os.path.join(self.tmp_dir, "fake.pdf")
+        with open(fake_pdf, "wb") as f:
+            f.write(b"NOT_A_PDF_HEADER_1234567890")
+
+        for invalid in (fifo_path, fake_pdf, self.tmp_dir, os.path.join(self.tmp_dir, "bad\x00.pdf")):
+            with self.subTest(target=invalid):
+                with self.assertRaises((ValueError, IsADirectoryError)):
+                    PDFEngine.inspect_pdf(invalid)
+
+
 if __name__ == "__main__":
     unittest.main()

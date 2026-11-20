@@ -1610,17 +1610,19 @@ class PDFpanelWindow(Gtk.ApplicationWindow):
 
     def _on_open_in_docupanel(self):
         target = self.active_pdf
-        if not target:
+        if not target or "\x00" in str(target):
             self._show_error("Open or create a PDF first.")
             return
         try:
-            subprocess.Popen(["docupanel", target], start_new_session=True)
+            subprocess.Popen(["docupanel", os.path.abspath(target)], start_new_session=True)
         except Exception as e:
             self._show_error(f"Could not launch DocuPanel:\n{e}")
 
     def _on_open_last_folder(self):
         path = self._last_output_path or self.active_pdf
-        folder = os.path.dirname(path) if path else os.path.expanduser("~")
+        if path and "\x00" in str(path):
+            return
+        folder = os.path.dirname(os.path.abspath(path)) if path else os.path.expanduser("~")
         try:
             subprocess.Popen(["xdg-open", folder], start_new_session=True)
         except Exception as e:

@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import statistics
 import subprocess
 import tempfile
@@ -503,12 +504,41 @@ class QpdfBridge:
 
     @classmethod
     def _write_dst(cls, dst_h: ctypes.c_void_p, out_abs: str):
-        rc = cls._lib.qpdf_init_write(dst_h, os.fsencode(out_abs))
-        cls._raise_if_error(dst_h, rc, "init_write")
-        # Must be set after qpdf_init_write initializes the underlying QPDFWriter
-        cls._lib.qpdf_set_object_stream_mode(dst_h, cls._O_GENERATE)
-        rc = cls._lib.qpdf_write(dst_h)
-        cls._raise_if_error(dst_h, rc, "write")
+        """Atomically write dst_h to out_abs via a temporary file so in-place saves never truncate open sources."""
+        out_abs = os.path.abspath(out_abs)
+        if os.path.isdir(out_abs):
+            raise IsADirectoryError(f"Output path is a directory: {out_abs}")
+        out_dir = os.path.dirname(out_abs) or "."
+        os.makedirs(out_dir, exist_ok=True)
+        existing_mode = None
+        if os.path.exists(out_abs) and not os.path.islink(out_abs):
+            try:
+                existing_mode = stat.S_IMODE(os.stat(out_abs).st_mode) & 0o777
+            except OSError:
+                pass
+
+        fd, tmp_path = tempfile.mkstemp(prefix=".pdfpanel_qpdf_", suffix=".pdf", dir=out_dir)
+        os.close(fd)
+        try:
+            rc = cls._lib.qpdf_init_write(dst_h, os.fsencode(tmp_path))
+            cls._raise_if_error(dst_h, rc, "init_write")
+            # Must be set after qpdf_init_write initializes the underlying QPDFWriter
+            cls._lib.qpdf_set_object_stream_mode(dst_h, cls._O_GENERATE)
+            rc = cls._lib.qpdf_write(dst_h)
+            cls._raise_if_error(dst_h, rc, "write")
+            if existing_mode is not None:
+                try:
+                    os.chmod(tmp_path, existing_mode)
+                except OSError:
+                    pass
+            os.replace(tmp_path, out_abs)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
 
     @classmethod
     def split_pages(cls, src_pdf: str, jobs: List[Tuple[str, List[int]]]) -> List[str]:
@@ -819,12 +849,33 @@ class PDFEngine:
             raise RuntimeError("Ghostscript ('gs') is not installed or not in PATH.")
         return gs
 
+    MAX_RESOLVED_PAGES = 20_000
+
+    @classmethod
+    def _verify_regular_pdf(cls, pdf_path: str) -> str:
+        """Validate that pdf_path is a regular, non-empty PDF file (blocking FIFOs, devices, directories, and null bytes)."""
+        if not pdf_path or not isinstance(pdf_path, str) or "\x00" in pdf_path:
+            raise ValueError("Invalid PDF file path.")
+        abs_path = os.path.abspath(pdf_path)
+        if not os.path.exists(abs_path):
+            raise FileNotFoundError(f"PDF file not found: {abs_path}")
+        if os.path.isdir(abs_path):
+            raise IsADirectoryError(f"Path is a directory, not a PDF file: {abs_path}")
+        st = os.stat(abs_path)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"Refusing to open non-regular file (FIFO/device/socket): {abs_path}")
+        if st.st_size < 8:
+            raise ValueError(f"File is empty or too small to be a valid PDF: {abs_path}")
+        with open(abs_path, "rb") as f:
+            header = f.read(1024)
+        if b"%PDF-" not in header:
+            raise ValueError(f"File does not have a valid %PDF- header: {abs_path}")
+        return abs_path
+
     @classmethod
     def inspect_pdf(cls, pdf_path: str) -> PDFInfo:
         """Read page count, dimensions, file size, and bookmark count."""
-        abs_path = os.path.abspath(pdf_path)
-        if not os.path.isfile(abs_path):
-            raise FileNotFoundError(f"PDF file not found: {abs_path}")
+        abs_path = cls._verify_regular_pdf(pdf_path)
         size = os.path.getsize(abs_path)
         pages = 0
         w, h = 595.0, 842.0
@@ -1174,13 +1225,14 @@ class PDFEngine:
     # ----------------------------------------------------------------------
     @staticmethod
     def _encode_pdf_text(text: str) -> str:
-        """Encode bookmark title safely for PostScript pdfmark (ASCII or UTF-16BE hex)."""
+        """Encode bookmark title safely for PostScript pdfmark (ASCII or UTF-16BE hex, blocking control-char newline breakout)."""
+        clean = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text or "")).strip()
         try:
-            text.encode("ascii")
-            escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            clean.encode("ascii")
+            escaped = clean.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
             return f"({escaped})"
         except UnicodeEncodeError:
-            be_bytes = b"\xfe\xff" + text.encode("utf-16-be")
+            be_bytes = b"\xfe\xff" + clean.encode("utf-16-be")
             return f"<{be_bytes.hex().upper()}>"
 
     @classmethod
@@ -1246,11 +1298,11 @@ class PDFEngine:
         uncomp = os.path.join(temp_dir, "uncomp.pdf")
         subprocess.run(
             [
-                gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite",
+                gs, "-dSAFER", "-P-", "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite",
                 "-dCompatibilityLevel=1.4",
                 f"-sOutputFile={uncomp}", src_pdf,
             ],
-            check=True, capture_output=True,
+            check=True, capture_output=True, timeout=60,
         )
         with open(uncomp, "rb") as f:
             raw2 = f.read()
@@ -1269,11 +1321,13 @@ class PDFEngine:
         replace_existing: bool = True,
     ) -> str:
         """Write hierarchical PDF bookmarks into out_pdf (preserving pages and content)."""
+        if not out_pdf or not isinstance(out_pdf, str) or "\x00" in out_pdf:
+            raise ValueError("Invalid output PDF path.")
         out_abs = os.path.abspath(out_pdf)
+        if os.path.isdir(out_abs):
+            raise IsADirectoryError(f"Output path is a directory: {out_abs}")
         os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
-        src_abs = os.path.abspath(src_pdf)
-        if not os.path.isfile(src_abs):
-            raise FileNotFoundError(f"PDF file not found: {src_abs}")
+        src_abs = cls._verify_regular_pdf(src_pdf)
 
         if QpdfBridge.is_available():
             try:
@@ -1297,10 +1351,10 @@ class PDFEngine:
                 f.write(pm_content)
 
             tmp_out = os.path.join(tmp_dir, "result.pdf")
-            cmd = [gs, "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={tmp_out}", input_pdf]
+            cmd = [gs, "-dSAFER", "-P-", "-dBATCH", "-dNOPAUSE", "-q", "-sDEVICE=pdfwrite", f"-sOutputFile={tmp_out}", input_pdf]
             if pm_content.strip():
                 cmd.append(marks_ps)
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
             if proc.returncode != 0 or not os.path.isfile(tmp_out):
                 raise RuntimeError(f"Ghostscript bookmark write failed:\n{proc.stderr or proc.stdout}")
             shutil.move(tmp_out, out_abs)
@@ -1309,11 +1363,14 @@ class PDFEngine:
     # ----------------------------------------------------------------------
     # Merge PDFs
     # ----------------------------------------------------------------------
-    @staticmethod
-    def parse_page_spec(spec: str, max_pages: int) -> List[int]:
-        """Parse page specs like '1-3, 5, 8-10' or 'all' into ordered 1-based page numbers."""
+    @classmethod
+    def parse_page_spec(cls, spec: str, max_pages: int) -> List[int]:
+        """Parse page specs like '1-3, 5, 8-10' or 'all' into ordered 1-based page numbers with OOM bounds protection."""
+        max_pages = max(1, int(max_pages))
         s = (spec or "").strip().lower()
         if not s or s in ("all", "*"):
+            if max_pages > cls.MAX_RESOLVED_PAGES:
+                raise ValueError(f"Page count ({max_pages}) exceeds maximum merge limit ({cls.MAX_RESOLVED_PAGES}).")
             return list(range(1, max_pages + 1))
         pages: List[int] = []
         for part in s.split(","):
@@ -1322,8 +1379,15 @@ class PDFEngine:
                 continue
             if "-" in part:
                 a_s, b_s = part.split("-", 1)
-                a = max(1, int(a_s.strip())) if a_s.strip() else 1
-                b = min(max_pages, int(b_s.strip())) if b_s.strip() else max_pages
+                raw_a = int(a_s.strip()) if a_s.strip() else 1
+                raw_b = int(b_s.strip()) if b_s.strip() else max_pages
+                if (raw_a < 1 and raw_b < 1) or (raw_a > max_pages and raw_b > max_pages):
+                    continue
+                a = max(1, min(max_pages, raw_a))
+                b = max(1, min(max_pages, raw_b))
+                span = abs(b - a) + 1
+                if len(pages) + span > cls.MAX_RESOLVED_PAGES:
+                    raise ValueError(f"Page specification '{spec}' exceeds maximum resolved pages ({cls.MAX_RESOLVED_PAGES}).")
                 if a <= b:
                     pages.extend(range(a, b + 1))
                 else:
@@ -1331,6 +1395,8 @@ class PDFEngine:
             else:
                 pg = int(part)
                 if 1 <= pg <= max_pages:
+                    if len(pages) + 1 > cls.MAX_RESOLVED_PAGES:
+                        raise ValueError(f"Page specification '{spec}' exceeds maximum resolved pages ({cls.MAX_RESOLVED_PAGES}).")
                     pages.append(pg)
         if not pages:
             raise ValueError(f"No valid pages resolved from specification '{spec}' (max={max_pages}).")
@@ -1349,7 +1415,13 @@ class PDFEngine:
         """
         if not sources:
             raise ValueError("Add at least one PDF file to merge.")
+        if not out_pdf or not isinstance(out_pdf, str) or "\x00" in out_pdf:
+            raise ValueError("Invalid output PDF path.")
         out_abs = os.path.abspath(out_pdf)
+        if os.path.isdir(out_abs):
+            raise IsADirectoryError(f"Output path is a directory: {out_abs}")
+        for src_path, _ in sources:
+            cls._verify_regular_pdf(src_path)
         os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
 
         if QpdfBridge.is_available():
@@ -1521,9 +1593,20 @@ class PDFEngine:
         Uses in-process libqpdf C API for fast lossless splitting with Ghostscript/Poppler fallback.
         Returns list of generated PDF file paths.
         """
+        if not output_dir or not isinstance(output_dir, str) or "\x00" in output_dir:
+            raise ValueError("Invalid output directory.")
+        if prefix is not None and (
+            not isinstance(prefix, str)
+            or "\x00" in prefix
+            or "/" in prefix
+            or "\\" in prefix
+            or ".." in prefix
+        ):
+            raise ValueError("Split filename prefix cannot contain path traversal characters.")
         info = cls.inspect_pdf(src_pdf)
         total = max(1, info.page_count)
-        base = prefix or cls._sanitize_slug(os.path.splitext(os.path.basename(src_pdf))[0])
+        raw_base = prefix.strip() if (prefix and prefix.strip()) else os.path.splitext(os.path.basename(src_pdf))[0]
+        base = cls._sanitize_slug(raw_base)
         out_dir = os.path.abspath(output_dir)
         os.makedirs(out_dir, exist_ok=True)
 
@@ -1636,20 +1719,24 @@ class PDFEngine:
         Returns (out_pdf_abs, original_bytes, compressed_bytes).
         """
         gs = cls._ensure_gs()
-        src_abs = os.path.abspath(src_pdf)
+        src_abs = cls._verify_regular_pdf(src_pdf)
+        if not out_pdf or not isinstance(out_pdf, str) or "\x00" in out_pdf:
+            raise ValueError("Invalid output PDF path.")
         out_abs = os.path.abspath(out_pdf)
-        if not os.path.isfile(src_abs):
-            raise FileNotFoundError(f"PDF file not found: {src_abs}")
+        if os.path.isdir(out_abs):
+            raise IsADirectoryError(f"Output path is a directory: {out_abs}")
         orig_size = os.path.getsize(src_abs)
         os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
 
         cfg = cls.COMPRESSION_PRESETS.get(preset, cls.COMPRESSION_PRESETS["ebook"])
-        dpi = int(custom_dpi) if custom_dpi and custom_dpi >= 36 else cfg["color_dpi"]
+        dpi = max(36, min(2400, int(custom_dpi))) if custom_dpi and int(custom_dpi) >= 36 else cfg["color_dpi"]
 
         with tempfile.TemporaryDirectory(prefix="pdfpanel_comp_") as tmp_dir:
             tmp_out = os.path.join(tmp_dir, "compressed.pdf")
             cmd = [
                 gs,
+                "-dSAFER",
+                "-P-",
                 "-sDEVICE=pdfwrite",
                 "-dCompatibilityLevel=1.5",
                 f"-dPDFSETTINGS={cfg['gs_setting']}",
